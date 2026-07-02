@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>訪問看護 算定判定支援ツール（Phase 1）</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-head">
+    <h1>訪問看護 算定判定支援ツール</h1>
+    <p class="sub">Phase 1：保険種別判定＋基本報酬マッチング ／ データはこの端末のブラウザ内にのみ保存されます（外部送信なし）</p>
+    <nav id="tabs" aria-label="メインメニュー"></nav>
+  </header>
+
+  <div class="disclaimer" role="note">
+    <strong>本ツールは算定支援・シミュレーション用です。</strong>
+    出力は公式な請求根拠として使用できません。最終的な算定・請求の判断と責任は、利用者（有資格者）にあります。
+    金額・算定要件は一次資料（告示・通知）と照合されるまで「未設定・要確認」として表示されます。
+  </div>
+
+  <main>
+    <div id="content"></div>
+  </main>
+
+  <footer class="app-foot">
+    <p>参考一次情報源（必ず最新版を確認）: 厚生労働省「令和8年度診療報酬改定について」 https://www.mhlw.go.jp/stf/newpage_67729.html ／
+    利用者情報は匿名IDで管理し、実名・詳細な病状は入力しない運用としてください。</p>
+  </footer>
+
+  <script src="masters.js"></script>
+  <script src="tests.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

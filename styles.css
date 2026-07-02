@@ -1,0 +1,244 @@
+/* =========================================================================
+ * 訪問看護 算定判定支援ツール — スタイル
+ * 配色は情報を運ぶ: 医療保険=青 / 介護保険=緑 / 要確認=琥珀 / 確定=深緑
+ * ========================================================================= */
+
+:root {
+  --bg: #F5F7F6;
+  --surface: #FFFFFF;
+  --ink: #22302E;
+  --ink-soft: #5B6B68;
+  --line: #D8E0DD;
+  --head: #123F38;         /* ヘッダーの深緑（訪問看護の落ち着いた基調） */
+  --medical: #2C5FA8;      /* 医療保険 = 青 */
+  --medical-bg: #E9F0FA;
+  --kaigo: #1B7A4B;        /* 介護保険 = 緑 */
+  --kaigo-bg: #E8F5EE;
+  --confirm: #8A5A00;      /* 要確認 = 琥珀 */
+  --confirm-bg: #FFF3D6;
+  --ok: #1B7A4B;
+  --ok-bg: #E8F5EE;
+  --fail: #A03030;
+  --fail-bg: #FBEAEA;
+  --focus: #2C5FA8;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+  font-size: 14px;
+  line-height: 1.65;
+}
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---------- ヘッダー・免責 ---------- */
+header.app-head {
+  background: var(--head);
+  color: #F2F7F5;
+  padding: 14px 24px 0;
+}
+header.app-head h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+header.app-head .sub {
+  font-size: 12px;
+  color: #BED4CE;
+  margin: 2px 0 10px;
+  letter-spacing: 0.04em;
+}
+.disclaimer {
+  background: var(--confirm-bg);
+  border-bottom: 1px solid #E8D6A8;
+  color: #5C4400;
+  font-size: 12.5px;
+  padding: 8px 24px;
+}
+.disclaimer strong { color: #4A3700; }
+
+/* ---------- タブ ---------- */
+nav#tabs { display: flex; gap: 2px; }
+.tab-btn {
+  appearance: none;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: #CFE0DB;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 8px 18px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+}
+.tab-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.tab-btn.active { background: var(--bg); color: var(--head); font-weight: 700; }
+
+/* ---------- レイアウト ---------- */
+main { max-width: 1150px; margin: 20px auto 60px; padding: 0 24px; }
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 22px 22px;
+}
+.panel-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.panel h2 { margin: 0; font-size: 17px; letter-spacing: 0.04em; }
+.panel h3 { margin: 26px 0 10px; font-size: 15px; border-top: 1px solid var(--line); padding-top: 18px; }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+
+/* ---------- テーブル ---------- */
+table.data { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
+table.data th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  border-bottom: 2px solid var(--line);
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+table.data td { border-bottom: 1px solid var(--line); padding: 7px 10px; vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.visit-row { cursor: pointer; }
+tr.visit-row:hover { background: #F0F5F3; }
+tr.visit-row.selected { background: var(--medical-bg); }
+
+/* ---------- チップ（保険種別・状態） ---------- */
+.chip {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 1px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+}
+.chip-medical { background: var(--medical-bg); color: var(--medical); border: 1px solid #B9CCE8; }
+.chip-kaigo   { background: var(--kaigo-bg);   color: var(--kaigo);   border: 1px solid #B4DCC6; }
+.chip-confirm { background: var(--confirm-bg); color: var(--confirm); border: 1px solid #E8D6A8; }
+.chip-ok      { background: var(--ok-bg);      color: var(--ok);      border: 1px solid #B4DCC6; }
+.chip-fail    { background: var(--fail-bg);    color: var(--fail);    border: 1px solid #E5BCBC; }
+
+/* ---------- 判定詳細（根拠トレース＝このツールの中核表示） ---------- */
+.detail {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--head);
+  border-radius: 6px;
+  padding: 14px 18px;
+  background: #FBFDFC;
+}
+.detail h3 { margin: 0 0 12px; border: none; padding: 0; font-size: 15px; }
+.detail h4 { margin: 14px 0 6px; font-size: 13.5px; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 800px) { .detail-grid { grid-template-columns: 1fr; } }
+
+ol.trace { list-style: none; margin: 6px 0; padding: 0; }
+.trace-step {
+  position: relative;
+  padding: 5px 0 5px 18px;
+  border-left: 2px solid var(--line);
+  margin-left: 6px;
+}
+.trace-step::before {
+  content: "";
+  position: absolute;
+  left: -5px; top: 12px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--head);
+}
+.trace-name { font-weight: 600; margin-right: 8px; }
+.trace-result { color: var(--head); font-weight: 700; margin-right: 8px; }
+.trace-note { color: var(--ink-soft); font-size: 12.5px; }
+.judg-reason { font-size: 13px; background: var(--ok-bg); border-radius: 4px; padding: 6px 10px; }
+
+ul.confirm-list { margin: 4px 0; padding-left: 0; list-style: none; }
+ul.confirm-list li { padding: 3px 0; font-size: 13px; }
+
+.fee-item {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: var(--surface);
+}
+.fee-item.st-applied     { border-left: 4px solid var(--ok); }
+.fee-item.st-unconfirmed { border-left: 4px solid var(--confirm); background: #FFFDF5; }
+.fee-item.st-check       { border-left: 4px solid var(--confirm); background: #FFFDF5; }
+.fee-item.st-excluded    { border-left: 4px solid #C4CCC9; opacity: 0.75; }
+.fee-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.fee-head .code { font-family: Consolas, monospace; font-size: 11.5px; color: var(--ink-soft); }
+ul.reason-list { margin: 4px 0 2px; padding-left: 18px; font-size: 12.5px; }
+ul.reason-list li.reason { color: var(--ink-soft); }
+ul.reason-list li.need-confirm { list-style: none; margin-left: -18px; padding: 2px 0; }
+.source { font-size: 11.5px; color: var(--ink-soft); margin: 4px 0 0; }
+.need-confirm-text { color: var(--confirm); }
+.ok-text { color: var(--ok); font-weight: 600; }
+.total-line { font-size: 15px; margin-top: 14px; border-top: 2px solid var(--line); padding-top: 10px; }
+
+h4.st-applied { color: var(--ok); }
+h4.st-unconfirmed, h4.st-check { color: var(--confirm); }
+h4.st-excluded { color: var(--ink-soft); }
+
+/* ---------- フォーム ---------- */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px 18px;
+  margin-top: 8px;
+}
+.form-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--ink-soft); font-weight: 600; }
+.form-grid .wide { grid-column: 1 / -1; }
+input, select {
+  font: inherit;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--ink);
+}
+input:focus, select:focus { border-color: var(--focus); }
+
+/* ---------- ボタン ---------- */
+.btn {
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+.btn:hover { background: #F0F5F3; }
+.btn-primary { background: var(--head); border-color: var(--head); color: #fff; }
+.btn-primary:hover { background: #1A5A50; }
+.btn-danger { color: var(--fail); border-color: #E5BCBC; }
+.btn-danger:hover { background: var(--fail-bg); }
+.btn-sm { padding: 2px 10px; font-size: 12px; }
+
+/* ---------- 通知・注記 ---------- */
+.notice { border-radius: 6px; padding: 10px 14px; font-size: 13px; margin: 12px 0; }
+.notice-warn { background: var(--confirm-bg); border: 1px solid #E8D6A8; color: #5C4400; }
+.hint { color: var(--ink-soft); font-size: 12.5px; }
+.empty { color: var(--ink-soft); padding: 18px 0; }
+.muted { color: var(--ink-soft); }
+
+footer.app-foot {
+  max-width: 1150px;
+  margin: 0 auto 30px;
+  padding: 0 24px;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .detail { animation: fadein 0.18s ease-out; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+}
