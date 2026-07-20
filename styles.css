@@ -62,8 +62,18 @@ header.app-head .sub {
 .disclaimer strong { color: #4A3700; }
 
 /* ---------- タブ ---------- */
-nav#tabs { display: flex; gap: 2px; }
+/* 画面が狭いときは折り返さず横スクロールさせる（項目の欠落を防ぐ） */
+nav#tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+nav#tabs::-webkit-scrollbar { display: none; }
 .tab-btn {
+  white-space: nowrap;
+  flex: 0 0 auto;
   appearance: none;
   border: none;
   background: rgba(255, 255, 255, 0.08);
@@ -91,6 +101,9 @@ main { max-width: 1150px; margin: 20px auto 60px; padding: 0 24px; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 
 /* ---------- テーブル ---------- */
+/* 狭い画面では表だけを横スクロールさせ、ページ全体は横に伸ばさない */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 12px; }
+.table-scroll > table.data { margin-top: 0; min-width: 560px; }
 table.data { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
 table.data th {
   text-align: left;
@@ -196,6 +209,7 @@ h4.st-excluded { color: var(--ink-soft); }
 .form-grid .wide { grid-column: 1 / -1; }
 input, select {
   font: inherit;
+  font-size: 14px;   /* ラベルの小さい文字を継承させない */
   padding: 6px 9px;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -241,4 +255,122 @@ footer.app-foot {
 @media (prefers-reduced-motion: no-preference) {
   .detail { animation: fadein 0.18s ease-out; }
   @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+}
+
+/* =========================================================================
+ * かんたん判定（登録なしで保険種別だけを即座に出す画面）
+ * 訪問先でスマホから片手で使うことを前提に、タップ領域を大きく取る。
+ * ========================================================================= */
+
+.panel.quick { max-width: 780px; margin: 0 auto; }
+.q-sub { color: var(--ink-soft); font-size: 12.5px; font-weight: 400; }
+
+/* --- 訪問日・年齢 --- */
+.q-basics {
+  display: flex; flex-wrap: wrap; gap: 14px 28px;
+  padding: 14px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+.q-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-soft); font-weight: 600; }
+.q-field-head { display: flex; align-items: center; gap: 10px; }
+.q-age-row { display: flex; align-items: center; gap: 8px; }
+.q-age-row input[type="number"] { width: 110px; }
+.unit { color: var(--ink); font-weight: 700; font-size: 14px; }
+.linkish {
+  appearance: none; border: none; background: none; padding: 0;
+  font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--medical); text-decoration: underline; cursor: pointer;
+}
+
+/* --- 判定結果（画面で最も目立つ要素） --- */
+.q-result {
+  border: 2px solid; border-radius: 10px;
+  padding: 16px 18px; margin: 16px 0;
+  text-align: center;
+}
+.q-result-label { font-size: 11px; letter-spacing: 0.16em; font-weight: 700; opacity: 0.8; }
+.q-result-main { font-size: 34px; font-weight: 800; line-height: 1.2; letter-spacing: 0.04em; margin: 2px 0; }
+.q-result-why { color: var(--ink); font-size: 13px; margin: 8px 0 0; }
+.q-remain { color: var(--ink); font-size: 12.5px; font-weight: 600; margin: 10px 0 0; }
+.res-medical { background: var(--medical-bg); border-color: #B9CCE8; color: var(--medical); }
+.res-kaigo   { background: var(--kaigo-bg);   border-color: #B4DCC6; color: var(--kaigo); }
+.res-unknown { background: var(--confirm-bg); border-color: #E8D6A8; color: var(--confirm); }
+
+.q-confirms {
+  background: var(--confirm-bg); border: 1px solid #E8D6A8;
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
+}
+.q-confirms-head { margin: 0 0 2px; padding: 0; border: none; font-size: 13px; color: #5C4400; }
+.q-trace { margin: 0 0 18px; font-size: 13px; }
+.q-trace summary { cursor: pointer; color: var(--ink-soft); font-weight: 600; padding: 8px 0; }
+
+/* --- 質問カード --- */
+.q-questions { display: grid; gap: 12px; }
+.q-card {
+  border: 1px solid var(--line); border-left: 4px solid var(--line);
+  border-radius: 8px; padding: 12px 14px; background: #FBFDFC;
+}
+.q-card.answered { border-left-color: var(--head); background: var(--surface); }
+.q-text { font-size: 14.5px; font-weight: 700; line-height: 1.5; }
+.q-no {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--head); color: #fff;
+  font-size: 12px; font-weight: 700; margin-right: 8px;
+}
+.q-help { font-size: 12px; color: var(--ink-soft); margin: 5px 0 10px; }
+.q-done { color: var(--ok); font-weight: 600; }
+
+.seg { display: flex; gap: 8px; }
+.seg-wrap { flex-wrap: wrap; }
+.seg-btn {
+  appearance: none; font: inherit; font-size: 14px; font-weight: 600;
+  flex: 1 1 0; min-height: 44px; padding: 10px 14px;
+  border: 1.5px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--ink); cursor: pointer;
+}
+.seg-wrap .seg-btn { flex: 0 0 auto; min-height: 40px; padding: 8px 14px; font-size: 13.5px; }
+.seg-btn:hover { border-color: #A9BDB8; background: #F4F8F6; }
+.seg-btn.on { background: var(--head); border-color: var(--head); color: #fff; }
+.seg-btn.seg-unknown.on { background: var(--confirm); border-color: var(--confirm); color: #fff; }
+
+.q-actions {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin: 18px 0 12px; padding-top: 16px; border-top: 1px solid var(--line);
+}
+
+/* =========================================================================
+ * スマホ・タブレット対応
+ * ========================================================================= */
+
+/* タッチ端末では入力欄を16px以上にする（iOSの自動ズームを防ぐ） */
+@media (pointer: coarse) {
+  input, select { font-size: 16px; padding: 9px 10px; }
+  .btn { min-height: 44px; padding: 10px 18px; }
+  .btn-sm { min-height: 36px; padding: 6px 12px; }
+  .tab-btn { padding: 11px 16px; }
+  tr.visit-row td { padding: 11px 10px; }
+}
+
+@media (max-width: 640px) {
+  /* 幅の狭い端末でも16px以上を確保する（pointer:coarse が効かない場合の保険） */
+  input, select { font-size: 16px; padding: 9px 10px; }
+  header.app-head { padding: 11px 14px 0; }
+  header.app-head h1 { font-size: 16px; letter-spacing: 0.03em; }
+  header.app-head .sub { font-size: 11px; margin-bottom: 8px; }
+  .disclaimer { padding: 8px 14px; font-size: 11.5px; }
+  main { margin: 12px auto 40px; padding: 0 12px; }
+  footer.app-foot { padding: 0 14px; }
+  .panel { padding: 14px 14px 18px; }
+  .panel h2 { font-size: 16px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .detail { padding: 12px 14px; }
+  .q-basics { gap: 12px 20px; }
+  .q-result-main { font-size: 30px; }
+  .q-actions .btn { flex: 1 1 auto; }
+}
+
+/* 質問の選択肢が3つ横並びで窮屈になる幅では縦に積む */
+@media (max-width: 380px) {
+  .seg:not(.seg-wrap) { flex-direction: column; }
 }

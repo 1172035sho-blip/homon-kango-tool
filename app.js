@@ -79,13 +79,24 @@ const Engine = {
     const reasons = [];
     const done = (insurance) => ({ insurance, reasons, confirm, trace });
 
-    const age = calcAge(patient.birth_date, visitDate);
+    // 年齢は生年月日から算出する。かんたん判定など生年月日を持たない入力のために
+    // age_at_visit（訪問日時点の満年齢）での直接指定も受け付ける。
+    const direct = patient.age_at_visit;
+    const age = (direct === null || direct === undefined || direct === "" || isNaN(Number(direct)))
+      ? calcAge(patient.birth_date, visitDate)
+      : Number(direct);
     if (age === null) {
       trace.push({ step: "年齢の算出", result: "不可", note: "生年月日または訪問日が未入力・不正" });
       confirm.push("生年月日が未入力のため年齢を判定できません");
       return done("unknown");
     }
-    trace.push({ step: "年齢の算出", result: `${age}歳`, note: `生年月日 ${patient.birth_date} / 基準日 ${visitDate}` });
+    trace.push({
+      step: "年齢の算出",
+      result: `${age}歳`,
+      note: (direct === null || direct === undefined || direct === "")
+        ? `生年月日 ${patient.birth_date} / 基準日 ${visitDate}`
+        : `年齢を直接入力 / 基準日 ${visitDate}`
+    });
 
     const hyou7 = patient.designated_disease_hyou7;           // 別表7該当
     const tokutei = patient.designated_disease_16_of_40to64;  // 特定疾病（16疾病）該当
@@ -428,6 +439,7 @@ function persist() {
 const $ = (sel) => document.querySelector(sel);
 
 const TABS = [
+  { id: "quick",    label: "かんたん判定" },
   { id: "judge",    label: "判定・計算" },
   { id: "patients", label: "利用者" },
   { id: "visits",   label: "訪問記録" },
@@ -436,7 +448,7 @@ const TABS = [
   { id: "tests",    label: "テスト" }
 ];
 
-let currentTab = "judge";
+let currentTab = "quick";
 let selectedVisitId = null;
 
 function switchTab(id) {
@@ -447,7 +459,8 @@ function switchTab(id) {
 
 function render() {
   const el = $("#content");
-  if (currentTab === "judge") el.innerHTML = renderJudge();
+  if (currentTab === "quick") el.innerHTML = renderQuick();
+  else if (currentTab === "judge") el.innerHTML = renderJudge();
   else if (currentTab === "patients") el.innerHTML = renderPatients();
   else if (currentTab === "visits") el.innerHTML = renderVisits();
   else if (currentTab === "office") el.innerHTML = renderOffice();
@@ -475,6 +488,235 @@ function insuranceChip(ins) {
 }
 
 function confirmBadge(text) { return `<span class="chip chip-confirm">要確認</span> ${esc(text)}`; }
+
+/* ---------- かんたん判定タブ ----------
+ * 登録なし・1画面で保険種別だけを即座に出す。判定は Engine.judgeInsurance を
+ * そのまま呼ぶため、「判定・計算」タブと結論は必ず一致する。
+ * 質問は回答に応じて必要なものだけを出す（例: 特定疾病は40〜64歳のときだけ）。 */
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const quickState = {
+  date: todayISO(),
+  ageMode: "age",     // "age" = 年齢を直接入力 / "birth" = 生年月日から算出
+  age: "",
+  birth_date: "",
+  special: null,      // 特別訪問看護指示書の交付期間中か
+  hyou7: null,        // 別表7該当
+  tokutei: null,      // 介護保険の特定疾病（16疾病）該当
+  psych: null,        // 精神科訪問看護（認知症を除く）の対象
+  care_level: ""      // 要介護認定の状況
+};
+
+const QUICK_Q = {
+  special: {
+    text: "訪問日は、特別訪問看護指示書の交付期間中ですか？",
+    help: "交付期間中は、他の条件によらず医療保険が優先されます。",
+    labels: { true: "期間中", false: "期間中でない" }
+  },
+  hyou7: {
+    text: "別表7（厚生労働大臣が定める疾病等）に該当しますか？",
+    help: "該当する疾病等は告示の別表第七でご確認ください（本ツールは疾病名の一覧を持ちません）。",
+    labels: { true: "該当する", false: "該当しない" }
+  },
+  tokutei: {
+    text: "介護保険の特定疾病（16疾病）に該当しますか？",
+    help: "40〜64歳（第2号被保険者）の判定にのみ使用します。",
+    labels: { true: "該当する", false: "該当しない" }
+  },
+  psych: {
+    text: "精神科訪問看護（認知症を除く）の対象ですか？",
+    help: "対象の場合は医療保険が優先されます。",
+    labels: { true: "対象である", false: "対象でない" }
+  }
+};
+
+/** 訪問日時点の満年齢。判定不能は null */
+function quickAge() {
+  if (quickState.ageMode === "birth") return calcAge(quickState.birth_date, quickState.date);
+  const n = Number(quickState.age);
+  if (quickState.age === "" || isNaN(n) || n < 0 || n > 130) return null;
+  return Math.floor(n);
+}
+
+/** 現在の回答状況で「まだ聞く必要がある質問」だけを返す */
+function quickApplicable() {
+  const q = quickState;
+  const age = quickAge();
+  if (age === null) return [];
+  if (age < 40) return [];              // 40歳未満は他の条件によらず医療保険
+  const list = ["special"];
+  if (q.special === true) return list;  // 特別指示期間中 → 確定
+  list.push("hyou7");
+  if (q.hyou7 === true) return list;    // 別表7該当 → 確定
+  if (age < 65) {
+    list.push("tokutei");
+    if (q.tokutei !== true) return list;
+  } else {
+    list.push("psych");
+    if (q.psych === true) return list;  // 精神科訪問看護 → 確定
+  }
+  list.push("care");
+  return list;
+}
+
+/** かんたん判定の回答から、判定エンジンに渡す利用者オブジェクトを作る */
+function quickPatient() {
+  const q = quickState;
+  const age = quickAge();
+  const useBirth = q.ageMode === "birth";
+  return {
+    patient_id: "（かんたん判定）",
+    birth_date: useBirth ? (q.birth_date || null) : null,
+    age_at_visit: useBirth ? null : age,
+    care_level: q.care_level || null,
+    designated_disease_hyou7: q.hyou7,
+    designated_disease_16_of_40to64: q.tokutei,
+    psychiatric_non_dementia: q.psych,
+    instruction_sheet: {
+      issued_date: null,
+      valid_until: null,
+      // 「期間中」と回答された場合のみ、訪問日を含む期間として渡す
+      special_instruction_period: q.special === true ? { start: q.date, end: q.date } : null
+    }
+  };
+}
+
+function segButtons(key, value, labels) {
+  const opts = [
+    ["true", labels.true, value === true],
+    ["false", labels.false, value === false],
+    ["null", "わからない", value !== true && value !== false]
+  ];
+  return `<div class="seg" role="group">` + opts.map(([v, l, on]) =>
+    `<button type="button" class="seg-btn ${on ? "on" : ""} ${v === "null" ? "seg-unknown" : ""}" data-q="${key}" data-v="${v}">${esc(l)}</button>`
+  ).join("") + `</div>`;
+}
+
+function quickCareButtons() {
+  const opts = CARE_LEVELS_ALL.map(c =>
+    `<button type="button" class="seg-btn ${quickState.care_level === c ? "on" : ""} ${c === "不明" || c === "申請中" ? "seg-unknown" : ""}" data-q="care" data-v="${esc(c)}">${esc(c)}</button>`
+  ).join("");
+  return `<div class="seg seg-wrap" role="group">${opts}</div>`;
+}
+
+function quickCard(key, n) {
+  if (key === "care") {
+    return `<div class="q-card ${quickState.care_level ? "answered" : ""}">
+      <div class="q-text"><span class="q-no">${n}</span>要介護（要支援）認定の状況は？</div>
+      <div class="q-help">認定を受けていない・申請中・不明の場合は、自動判定せず「要確認」になります。</div>
+      ${quickCareButtons()}
+    </div>`;
+  }
+  const def = QUICK_Q[key];
+  const val = quickState[key];
+  return `<div class="q-card ${val === true || val === false ? "answered" : ""}">
+    <div class="q-text"><span class="q-no">${n}</span>${esc(def.text)}</div>
+    <div class="q-help">${esc(def.help)}</div>
+    ${segButtons(key, val, def.labels)}
+  </div>`;
+}
+
+function renderQuick() {
+  const q = quickState;
+  const age = quickAge();
+
+  /* --- 年齢の入力欄 --- */
+  const ageInput = q.ageMode === "birth"
+    ? `<input type="date" id="q-birth" value="${esc(q.birth_date)}" max="${esc(q.date)}">`
+    : `<input type="number" id="q-age" inputmode="numeric" min="0" max="130" placeholder="例: 78"
+         value="${esc(q.age)}" autocomplete="off"> <span class="unit">歳</span>`;
+
+  const head = `
+    <div class="q-basics">
+      <label class="q-field">訪問日
+        <input type="date" id="q-date" value="${esc(q.date)}">
+      </label>
+      <div class="q-field">
+        <span class="q-field-head">訪問日時点の年齢
+          <button type="button" class="linkish" id="q-agemode">${q.ageMode === "birth" ? "年齢で入力" : "生年月日で入力"}</button>
+        </span>
+        <span class="q-age-row">${ageInput}${age !== null && q.ageMode === "birth" ? `<span class="unit">→ ${age}歳</span>` : ""}</span>
+      </div>
+    </div>`;
+
+  return `
+  <section class="panel quick">
+    <div class="panel-head"><h2>かんたん判定</h2><span class="q-sub">医療保険／介護保険を、登録なしでその場で判定します</span></div>
+    ${head}
+    <div id="q-body">${renderQuickBody()}</div>
+  </section>`;
+}
+
+/* 年齢入力欄より下だけを描き直せるように分離する。
+   こうすると年齢を1文字入力するたびに入力欄自体が作り直されず、
+   フォーカスとカーソル位置がそのまま保たれる。 */
+function renderQuickBody() {
+  const q = quickState;
+  const age = quickAge();
+  const applicable = quickApplicable();
+  const unanswered = applicable.filter(k => k === "care" ? !q.care_level : (q[k] !== true && q[k] !== false));
+
+  if (age === null) {
+    return `<p class="empty">まず年齢（または生年月日）を入力してください。以降の質問は、入力内容に応じて必要なものだけが表示されます。</p>`;
+  }
+
+  /* --- 判定を実行（既存エンジンをそのまま使用） --- */
+  const j = Engine.judgeInsurance(quickPatient(), q.date);
+  const extra = (applicable.includes("special") && q.special === null)
+    ? ["特別訪問看護指示書の交付期間中かどうかが未回答です（期間中なら医療保険が優先されます）"]
+    : [];
+  const confirms = j.confirm.concat(extra);
+
+  const resultCls = j.insurance === "medical" ? "res-medical" : j.insurance === "kaigo" ? "res-kaigo" : "res-unknown";
+  const resultText = j.insurance === "unknown" ? "要確認" : INSURANCE_LABEL[j.insurance];
+
+  const result = `
+    <div class="q-result ${resultCls}">
+      <div class="q-result-label">判定結果</div>
+      <div class="q-result-main">${esc(resultText)}</div>
+      ${j.reasons.length ? `<p class="q-result-why">${j.reasons.map(esc).join("／")}</p>` : ""}
+      ${unanswered.length
+        ? `<p class="q-remain">未回答の質問があと ${unanswered.length} 問あります</p>`
+        : (j.insurance === "unknown"
+            ? `<p class="q-remain">回答内容だけでは自動判定できません（下記の要確認事項をご確認ください）</p>`
+            : "")}
+    </div>
+    ${confirms.length ? `
+      <div class="q-confirms">
+        <h3 class="q-confirms-head">要確認事項</h3>
+        <ul class="confirm-list">${confirms.map(c => `<li>${confirmBadge(c)}</li>`).join("")}</ul>
+      </div>` : ""}
+    <details class="q-trace">
+      <summary>判定の根拠（トレース）を見る</summary>
+      <ol class="trace">${j.trace.map(t => `
+        <li class="trace-step">
+          <span class="trace-name">${esc(t.step)}</span>
+          <span class="trace-result">${esc(t.result)}</span>
+          ${t.note ? `<span class="trace-note">${esc(t.note)}</span>` : ""}
+        </li>`).join("")}</ol>
+    </details>`;
+
+  const questions = applicable.length === 0
+    ? `<p class="q-done">この条件では、追加の質問なしで判定が確定します。</p>`
+    : applicable.map((k, i) => quickCard(k, i + 1)).join("");
+
+  const canSave = q.ageMode === "birth" && q.birth_date;
+
+  return `
+    ${result}
+    <div class="q-questions">${questions}</div>
+    <div class="q-actions">
+      <button type="button" class="btn" id="q-reset">回答をリセット</button>
+      ${canSave
+        ? `<button type="button" class="btn btn-primary" id="q-save">この内容で利用者を登録</button>`
+        : `<span class="hint">生年月日で入力すると、この内容を利用者として登録できます。</span>`}
+    </div>
+    <p class="hint">この画面は保険種別のみを判定します（入力内容は保存されません）。基本報酬・加算の金額まで見るには「判定・計算」タブをご利用ください。</p>`;
+}
 
 /* ---------- 判定・計算タブ ---------- */
 
@@ -532,11 +774,11 @@ function renderJudge() {
     </div>
     ${visits.length === 0
       ? `<p class="empty">この条件の訪問記録がありません。「訪問記録」タブから登録してください。</p>`
-      : `<table class="data">
+      : `<div class="table-scroll"><table class="data">
           <thead><tr><th>訪問日</th><th>利用者ID</th><th>職種</th><th>時間</th><th>保険種別</th><th>適用/未確定</th><th>要確認</th><th>確定合計</th></tr></thead>
           <tbody>${rows}</tbody>
-        </table>
-        <p class="hint">行をクリックすると判定の詳細（根拠トレース）を表示します。「適用/未確定」は 確定した項目数/要確認の項目数 です。</p>`}
+        </table></div>
+        <p class="hint">行をタップすると判定の詳細（根拠トレース）を表示します。「適用/未確定」は 確定した項目数/要確認の項目数 です。</p>`}
     ${detail}
   </section>`;
 }
@@ -660,9 +902,9 @@ function renderPatients() {
   <section class="panel">
     <div class="panel-head"><h2>利用者マスタ</h2></div>
     <p class="hint">実名は入力せず、匿名ID（例: P0001）で管理してください。ID と実名の対応表は本ツールの外（既存の業務システム等）で管理します。</p>
-    ${state.patients.length ? `<table class="data">
+    ${state.patients.length ? `<div class="table-scroll"><table class="data">
       <thead><tr><th>ID</th><th>生年月日</th><th>要介護度</th><th>別表7</th><th>特定疾病(40-64)</th><th>指示書期限</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table>` : `<p class="empty">利用者が未登録です。</p>`}
+      <tbody>${rows}</tbody></table></div>` : `<p class="empty">利用者が未登録です。</p>`}
 
     <h3>${p ? `利用者 ${esc(p.patient_id)} を編集` : "新規利用者を登録"}</h3>
     <form id="patient-form" class="form-grid">
@@ -712,9 +954,9 @@ function renderVisits() {
   return `
   <section class="panel">
     <div class="panel-head"><h2>訪問記録</h2></div>
-    ${state.visits.length ? `<table class="data">
+    ${state.visits.length ? `<div class="table-scroll"><table class="data">
       <thead><tr><th>ID</th><th>日付</th><th>開始</th><th>利用者</th><th>職種</th><th>分</th><th>同一建物</th><th>内容</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table>` : `<p class="empty">訪問記録がありません。</p>`}
+      <tbody>${rows}</tbody></table></div>` : `<p class="empty">訪問記録がありません。</p>`}
 
     <h3>訪問を記録</h3>
     ${state.patients.length === 0 ? `<p class="hint">先に「利用者」タブで利用者を登録してください。</p>` : `
@@ -791,10 +1033,10 @@ function renderMaster() {
       最終的な値の確認・承認は必ずご自身で行ってください。
       参考: 厚生労働省「令和8年度診療報酬改定について」
     </div>
-    <table class="data">
+    <div class="table-scroll"><table class="data">
       <thead><tr><th>コード</th><th>名称</th><th>保険</th><th>区分</th><th>金額</th><th>有効開始</th><th>検証</th><th>根拠</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>
+    </table></div>
     <p class="hint">時間帯区分定義: ${m.time_band_definitions && m.time_band_definitions.verified ? '<span class="chip chip-ok">設定済</span>' : '<span class="chip chip-confirm">未設定（要確認）</span>'}
     ／ PT等割合減算の基準: ${m.ptotst_ratio_reduction_rule && m.ptotst_ratio_reduction_rule.verified ? '<span class="chip chip-ok">設定済</span>' : '<span class="chip chip-confirm">未設定（要確認）</span>'}</p>
   </section>`;
@@ -811,7 +1053,7 @@ function renderTests() {
     body = `
       <p class="${pass === lastTestResults.length ? "ok-text" : "need-confirm-text"}">
         ${pass} / ${lastTestResults.length} 件 合格</p>
-      <table class="data">
+      <div class="table-scroll"><table class="data">
         <thead><tr><th>結果</th><th>シナリオ</th><th>期待値</th><th>実際</th><th>備考</th></tr></thead>
         <tbody>${lastTestResults.map(r => `
           <tr>
@@ -819,7 +1061,7 @@ function renderTests() {
             <td>${esc(r.name)}</td><td>${esc(r.expected)}</td><td>${esc(r.actual)}</td><td>${esc(r.note || "")}</td>
           </tr>`).join("")}
         </tbody>
-      </table>`;
+      </table></div>`;
   }
   return `
   <section class="panel">
@@ -845,8 +1087,55 @@ document.addEventListener("DOMContentLoaded", () => {
   render();
 });
 
+/** かんたん判定の回答を利用者マスタへ保存する（生年月日が入力されている場合のみ） */
+function quickSavePatient() {
+  const q = quickState;
+  const input = prompt("利用者ID（匿名IDを入力してください。例: P0001）", "");
+  if (input === null) return;
+  const pid = input.trim();
+  if (!pid) { alert("利用者IDが入力されていません。"); return; }
+  const idx = state.patients.findIndex(p => p.patient_id === pid);
+  if (idx >= 0 && !confirm(`利用者 ${pid} は既に登録されています。上書きしますか？`)) return;
+
+  const patient = {
+    patient_id: pid,
+    birth_date: q.birth_date || null,
+    care_level: q.care_level || null,
+    designated_disease_hyou7: q.hyou7,
+    designated_disease_16_of_40to64: q.tokutei,
+    psychiatric_non_dementia: q.psych,
+    // かんたん判定では指示書の実際の日付を入力していないため、ここでは設定しない
+    instruction_sheet: { issued_date: null, valid_until: null, special_instruction_period: null },
+    special_management_conditions_hyou8: [],
+    notes: ""
+  };
+  if (idx >= 0) state.patients[idx] = patient; else state.patients.push(patient);
+  persist();
+  alert(`利用者 ${pid} を登録しました。\n指示書の交付日・有効期限は「利用者」タブで入力してください（かんたん判定では未設定です）。`);
+  editingPatientId = pid;
+  switchTab("patients");
+}
+
 document.addEventListener("click", (e) => {
   const t = e.target;
+
+  /* --- かんたん判定 --- */
+  const seg = t.closest(".seg-btn");
+  if (seg) {
+    const key = seg.dataset.q;
+    if (key === "care") quickState.care_level = (quickState.care_level === seg.dataset.v ? "" : seg.dataset.v);
+    else quickState[key] = triFromForm(seg.dataset.v);
+    render(); return;
+  }
+  if (t.id === "q-agemode") {
+    quickState.ageMode = quickState.ageMode === "birth" ? "age" : "birth";
+    render(); return;
+  }
+  if (t.id === "q-reset") {
+    Object.assign(quickState, { age: "", birth_date: "", special: null, hyou7: null, tokutei: null, psych: null, care_level: "" });
+    render(); return;
+  }
+  if (t.id === "q-save") { quickSavePatient(); return; }
 
   const row = t.closest(".visit-row");
   if (row) { selectedVisitId = row.dataset.visit === selectedVisitId ? null : row.dataset.visit; render(); return; }
@@ -889,7 +1178,18 @@ document.addEventListener("click", (e) => {
   }
 });
 
+/* 年齢は入力のたびに再判定する。入力欄より下（#q-body）だけを描き直すので、
+   入力欄のDOMは作り直されず、フォーカスとカーソル位置がそのまま保たれる。 */
+document.addEventListener("input", (e) => {
+  if (e.target.id !== "q-age") return;
+  quickState.age = e.target.value;
+  const body = document.getElementById("q-body");
+  if (body) body.innerHTML = renderQuickBody();
+});
+
 document.addEventListener("change", (e) => {
+  if (e.target.id === "q-date") { quickState.date = e.target.value || todayISO(); render(); }
+  if (e.target.id === "q-birth") { quickState.birth_date = e.target.value; render(); }
   if (e.target.id === "judge-month") { judgeMonth = e.target.value; selectedVisitId = null; render(); }
   if (e.target.id === "judge-patient") { judgePatient = e.target.value; selectedVisitId = null; render(); }
   if (e.target.id === "master-import") {
