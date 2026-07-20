@@ -135,46 +135,211 @@ window.DEFAULT_FEE_MASTER = {
       notes: "月の初日/2日目以降の区分、機能強化型1〜3の区分を一次資料で確認すること"
     },
 
-    /* ---------------- Phase 2 予定：優先加算（要件・金額とも未整備） ---------------- */
+    /* ============================================================
+     * 医療保険：一般の訪問看護加算・療養費（A〜C群）
+     * 金額はすべて null（要確認）。amount_tiers は分岐する金額の受け皿で、
+     * 各キーの値は一次資料の確認後に入れる。verification_status は3値:
+     *   official_confirmed（告示本文で確認済み・合計に含める）
+     *   needs_recheck（令和8年度改定で変更の可能性・要再確認）
+     *   unconfirmed（未確認）
+     * 精神科訪問看護特有の加算は本ツールのスコープ外のため含めない。
+     * ============================================================ */
+
+    /* ---- A群：訪問ごとに算定 ---- */
     {
-      code: "MED_ADD_URGENT",
-      name_ja: "緊急時訪問看護加算（医療）※要検証",
-      insurance_type: "medical", category: "addition", phase: 2,
-      applies_to: { roles: null, same_building: null, duration_brackets: null },
-      amount: null, unit: null,
-      eligibility_conditions: null, monthly_limit: null, mutually_exclusive_with: [],
-      effective_from: null, effective_until: null, source_reference: null, verified: false,
-      notes: "令和6年度改定で24時間対応体制加算との関係が変わっている可能性。最新一次資料で確認"
-    },
-    {
-      code: "MED_ADD_SPECIAL_MGMT",
-      name_ja: "特別管理加算（医療）※要検証",
-      insurance_type: "medical", category: "addition", phase: 2,
-      applies_to: { roles: null, same_building: null, duration_brackets: null },
-      amount: null, unit: null,
-      eligibility_conditions: null, monthly_limit: null, mutually_exclusive_with: [],
-      effective_from: null, effective_until: null, source_reference: null, verified: false,
-      notes: "別表8該当者。重症度別の区分を一次資料で確認"
-    },
-    {
-      code: "MED_ADD_MULTI_STAFF",
-      name_ja: "複数名訪問看護加算（医療）※要検証",
-      insurance_type: "medical", category: "addition", phase: 2,
-      applies_to: { roles: null, same_building: null, duration_brackets: null },
-      amount: null, unit: null,
-      eligibility_conditions: null, monthly_limit: null, mutually_exclusive_with: [],
-      effective_from: null, effective_until: null, source_reference: null, verified: false,
-      notes: "同行職種の組み合わせ別の区分を一次資料で確認"
+      code: "MED_ADD_EMERGENCY_VISIT",
+      name_ja: "緊急訪問看護加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_day",
+      amount: null, unit: "円",
+      amount_tiers: { within_14days: null, from_15th_day: null }, // 月14日目まで/15日目以降
+      requires_notification: true, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "24時間対応体制の届出が前提。当月の緊急訪問通算日数で14日目境界。金額を一次資料で確認"
     },
     {
       code: "MED_ADD_LONG_VISIT",
-      name_ja: "長時間訪問看護加算（医療）※要検証",
-      insurance_type: "medical", category: "addition", phase: 2,
-      applies_to: { roles: null, same_building: null, duration_brackets: null },
-      amount: null, unit: null,
-      eligibility_conditions: null, monthly_limit: null, mutually_exclusive_with: [],
-      effective_from: null, effective_until: null, source_reference: null, verified: false,
-      notes: ""
+      name_ja: "長時間訪問看護加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_visit",
+      amount: null, unit: "円",
+      requires_notification: false, monthly_limit: null, weekly_limit_default: null, weekly_limit_special: null,
+      mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "90分超が対象。週1日限度（対象者により週3日）。対象者区分と金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_INFANT",
+      name_ja: "乳幼児加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_day",
+      amount: null, unit: "円",
+      amount_tiers: { standard: null, special: null }, // 標準/上位区分
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "6歳未満が対象。上位区分の対象者要件と金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_MULTI_VISIT_INTRACTABLE",
+      name_ja: "難病等複数回訪問加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_day",
+      amount: null, unit: "円",
+      // 当日2回/3回以上 × 同一建物以外/同一建物
+      amount_tiers: { visits2_other: null, visits2_same: null, visits3plus_other: null, visits3plus_same: null },
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "needs_recheck",
+      notes: "別表7該当または特別指示期間中かつ当日2回以上。令和8年度で在宅難治性皮膚疾患処置指導管理が対象追加。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_MULTI_STAFF",
+      name_ja: "複数名訪問看護加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_visit",
+      amount: null, unit: "円",
+      amount_tiers: { i: null, ro: null, ha: null, ni: null }, // イ/ロ/ハ/ニ（同行職種別）
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "同行者の職種でイ〜ニに区分。当日/週の算定回数と金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_NIGHT_EARLY",
+      name_ja: "夜間・早朝訪問看護加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_visit",
+      amount: null, unit: "円",
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: ["MED_ADD_DEEP_NIGHT"],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "18-22時・6-8時。時間帯の境界は time_band_definitions で確認。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_DEEP_NIGHT",
+      name_ja: "深夜訪問看護加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_visit",
+      amount: null, unit: "円",
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: ["MED_ADD_NIGHT_EARLY"],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "22-6時。時間帯の境界は time_band_definitions で確認。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_SPECIAL_AREA",
+      name_ja: "特別地域訪問看護加算（医療）", group: "A",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_visit",
+      amount: null, unit: "円", rate: null, // 所定額の50%
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "事業所からの移動1時間以上＋特別地域指定。算定率（所定額の50%）を一次資料で確認"
+    },
+
+    /* ---- B群：月次で算定する管理療養費付随加算 ---- */
+    {
+      code: "MED_ADD_24H_SYSTEM",
+      name_ja: "24時間対応体制加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "monthly",
+      amount: null, unit: "円",
+      amount_tiers: { with_reduction: null, without_reduction: null }, // 業務負担軽減の取組の有無
+      requires_notification: true, monthly_limit: 1, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "事業所届出＋利用者同意。取組の有無で金額区分。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_SPECIAL_MGMT",
+      name_ja: "特別管理加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "monthly",
+      amount: null, unit: "円",
+      amount_tiers: { standard: null, severe: null }, // 標準/別表8うち重症度等の高いもの
+      requires_notification: true, monthly_limit: 1, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "needs_recheck",
+      notes: "別表8該当者。標準/重症の区分は利用者マスタの明示フラグで判定。令和8年度で対象追加。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_DISCHARGE_JOINT",
+      name_ja: "退院時共同指導加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_month",
+      amount: null, unit: "円", special_mgmt_guidance_amount: null, // 別表8該当者への特別管理指導加算
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "別表7該当者は月2回。別表8該当者には特別管理指導加算を別途。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_DISCHARGE_SUPPORT",
+      name_ja: "退院支援指導加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "per_month",
+      amount: null, unit: "円",
+      amount_tiers: { standard: null, long: null }, // 標準/長時間
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "退院日＋指導実施記録。長時間の場合は上位区分。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_HOME_LIAISON",
+      name_ja: "在宅患者連携指導加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "monthly",
+      amount: null, unit: "円",
+      requires_notification: false, monthly_limit: 1, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "歯科・薬局等との情報共有記録。月1回。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_EMERGENCY_CONF",
+      name_ja: "在宅患者緊急時等カンファレンス加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "monthly",
+      amount: null, unit: "円",
+      requires_notification: false, monthly_limit: 2, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "共同カンファレンスの実施記録。月2回限度。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_SPECIALIST_MGMT",
+      name_ja: "専門管理加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "monthly",
+      amount: null, unit: "円",
+      requires_notification: true, monthly_limit: 1, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "研修修了看護師＋対象者の状態。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_CARE_STAFF_LIAISON",
+      name_ja: "看護・介護職員連携強化加算（医療）", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "monthly",
+      amount: null, unit: "円",
+      requires_notification: false, monthly_limit: 1, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "喀痰吸引等事業者との連携支援記録。金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_DX_INFO",
+      name_ja: "訪問看護医療DX情報活用加算", group: "B",
+      insurance_type: "medical", category: "addition", phase: 2, billing_unit: "monthly",
+      amount: null, unit: "円",
+      requires_notification: true, monthly_limit: 1, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "needs_recheck",
+      notes: "オンライン請求・オンライン資格確認体制の届出。令和8年度の新設・区分見直しに注意。金額を一次資料で確認"
+    },
+
+    /* ---- C群：独立した療養費項目 ---- */
+    {
+      code: "MED_RYO_INFO_PROVIDE",
+      name_ja: "訪問看護情報提供療養費Ⅰ／Ⅱ／Ⅲ", group: "C",
+      insurance_type: "medical", category: "ryoyohi", phase: 3, billing_unit: "per_month",
+      amount: null, unit: "円",
+      amount_tiers: { i: null, ii: null, iii: null }, // 市町村等/学校/転院先医療機関
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "提供先で区分。実施記録・提供先を確認。金額を一次資料で確認"
+    },
+    {
+      code: "MED_RYO_TERMINAL",
+      name_ja: "訪問看護ターミナルケア療養費Ⅰ／Ⅱ", group: "C",
+      insurance_type: "medical", category: "ryoyohi", phase: 3, billing_unit: "per_death",
+      amount: null, unit: "円",
+      amount_tiers: { i: null, ii: null },
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "死亡日前14日以内に2回以上の訪問＋説明・同意記録。Ⅰ/Ⅱの区分と金額を一次資料で確認"
+    },
+    {
+      code: "MED_ADD_REMOTE_DEATH",
+      name_ja: "遠隔死亡診断補助加算（医療）", group: "C",
+      insurance_type: "medical", category: "addition", phase: 3, billing_unit: "per_death",
+      amount: null, unit: "円",
+      requires_notification: false, monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: null, effective_until: null, source_reference: null, verification_status: "unconfirmed",
+      notes: "特定行為研修修了看護師による実施＋特別地域該当。金額を一次資料で確認"
     },
     {
       code: "KAIGO_ADD_URGENT",

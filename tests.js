@@ -9,7 +9,17 @@
 
 const TEST_MASTER = {
   meta: { master_name: "テスト専用マスタ（架空値・実在の点数ではない）" },
-  time_band_definitions: { verified: false, bands: null, source_reference: null },
+  // 加算テスト用に時間帯区分を設定（架空。深夜=22時〜翌6時）
+  time_band_definitions: {
+    verified: true, source_reference: "テスト用（実在せず）",
+    bands: [
+      { key: "early_morning", label: "早朝", from: "06:00", to: "08:00" },
+      { key: "day",           label: "日中", from: "08:00", to: "18:00" },
+      { key: "night",         label: "夜間", from: "18:00", to: "22:00" },
+      { key: "deep_night",    label: "深夜", from: "22:00", to: "24:00" },
+      { key: "deep_night",    label: "深夜", from: "00:00", to: "06:00" }
+    ]
+  },
   ptotst_ratio_reduction_rule: { verified: false, threshold_ratio: null, reduction_rate: null, source_reference: null },
   items: [
     {
@@ -38,11 +48,50 @@ const TEST_MASTER = {
       amount: null, unit: null,
       eligibility_conditions: null, monthly_limit: null, mutually_exclusive_with: [],
       effective_from: null, effective_until: null, source_reference: null, verified: false, notes: ""
+    },
+    /* --- 加算テスト用（すべて架空金額・実在の点数ではない） --- */
+    {
+      code: "MED_ADD_EMERGENCY_VISIT", name_ja: "【テスト】緊急訪問看護加算（架空）",
+      insurance_type: "medical", category: "addition", billing_unit: "per_day",
+      amount: null, unit: "円(架空)", amount_tiers: { within_14days: 900, from_15th_day: 700 },
+      monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: "2026-06-01", source_reference: "テスト用（実在せず）", verification_status: "official_confirmed"
+    },
+    {
+      code: "MED_ADD_DEEP_NIGHT", name_ja: "【テスト】深夜訪問看護加算（架空）",
+      insurance_type: "medical", category: "addition", billing_unit: "per_visit",
+      amount: 800, unit: "円(架空)",
+      monthly_limit: null, mutually_exclusive_with: ["MED_ADD_NIGHT_EARLY"],
+      effective_from: "2026-06-01", source_reference: "テスト用（実在せず）", verification_status: "official_confirmed"
+    },
+    {
+      code: "MED_ADD_NIGHT_EARLY", name_ja: "【テスト】夜間・早朝訪問看護加算（架空）",
+      insurance_type: "medical", category: "addition", billing_unit: "per_visit",
+      amount: 400, unit: "円(架空)",
+      monthly_limit: null, mutually_exclusive_with: ["MED_ADD_DEEP_NIGHT"],
+      effective_from: "2026-06-01", source_reference: "テスト用（実在せず）", verification_status: "official_confirmed"
+    },
+    {
+      code: "MED_ADD_SPECIAL_MGMT", name_ja: "【テスト】特別管理加算（架空）",
+      insurance_type: "medical", category: "addition", billing_unit: "monthly",
+      amount: null, unit: "円(架空)", amount_tiers: { standard: 500, severe: 999 },
+      monthly_limit: 1, mutually_exclusive_with: [],
+      effective_from: "2026-06-01", source_reference: "テスト用（実在せず）", verification_status: "official_confirmed"
+    },
+    {
+      code: "MED_RYO_TERMINAL", name_ja: "【テスト】ターミナルケア療養費（架空）",
+      insurance_type: "medical", category: "ryoyohi", billing_unit: "per_death",
+      amount: null, unit: "円(架空)", amount_tiers: { i: null, ii: null },
+      monthly_limit: null, mutually_exclusive_with: [],
+      effective_from: "2026-06-01", source_reference: "テスト用（実在せず）", verification_status: "official_confirmed"
     }
   ]
 };
 
-const TEST_OFFICE = { urgent_visit_registered: null, ptotst_visit_ratio: null, notes: "" };
+const TEST_OFFICE = {
+  urgent_visit_registered: null, ptotst_visit_ratio: null,
+  system_24h_registered: null, dx_info_registered: null, special_area: null, notes: ""
+};
 
 /* 架空の利用者シナリオ。expected は本ツールの仕様（骨子）から導いた期待値。 */
 const SCENARIOS = [
@@ -158,6 +207,71 @@ const SCENARIOS = [
     },
     visit: { visit_id: "VT-J", patient_id: "TJ", date: "2026-07-03", duration_minutes: 40, role: "PT", same_building: false },
     expect: { insurance: "kaigo", hasSheetWarning: true }
+  },
+
+  /* ===== 医療加算のシナリオ（架空マスタで金額まで検証） ===== */
+  {
+    name: "加算C: 別表8該当（留置カテーテル・標準）→ 特別管理加算（標準・架空500）",
+    patient: {
+      patient_id: "TK", birth_date: "1990-01-01", care_level: null,
+      designated_disease_hyou7: false, designated_disease_16_of_40to64: false, psychiatric_non_dementia: false,
+      beppyou8_applicable: true, beppyou8_severe: false, beppyou8_items: "留置カテーテル",
+      instruction_sheet: { issued_date: "2026-06-01", valid_until: "2026-08-31", special_instruction_period: null }
+    },
+    visits: [
+      { visit_id: "VT-K1", patient_id: "TK", date: "2026-07-03", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false }
+    ],
+    probeVisitIndex: 0,
+    expect: {
+      insurance: "medical",
+      monthlyAdditions: [{ code: "MED_ADD_SPECIAL_MGMT", status: "matched", amount: 500 }]
+    }
+  },
+  {
+    name: "加算D: 月5日目・深夜0時に緊急訪問 → 緊急訪問看護加算（架空900）＋深夜訪問看護加算（架空800）",
+    office: {
+      urgent_visit_registered: null, ptotst_visit_ratio: null,
+      system_24h_registered: true, dx_info_registered: null, special_area: null, notes: ""
+    },
+    patient: {
+      patient_id: "TL", birth_date: "1970-01-01", care_level: null,
+      designated_disease_hyou7: true, designated_disease_16_of_40to64: null, psychiatric_non_dementia: false,
+      instruction_sheet: { issued_date: "2026-06-01", valid_until: "2026-08-31", special_instruction_period: null }
+    },
+    visits: [
+      { visit_id: "VT-L1", patient_id: "TL", date: "2026-07-01", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false, is_emergency: true },
+      { visit_id: "VT-L2", patient_id: "TL", date: "2026-07-02", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false, is_emergency: true },
+      { visit_id: "VT-L3", patient_id: "TL", date: "2026-07-03", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false, is_emergency: true },
+      { visit_id: "VT-L4", patient_id: "TL", date: "2026-07-04", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false, is_emergency: true },
+      { visit_id: "VT-L5", patient_id: "TL", date: "2026-07-05", start_time: "00:00", duration_minutes: 40, role: "NS", same_building: false, is_emergency: true }
+    ],
+    probeVisitIndex: 4,
+    expect: {
+      insurance: "medical",
+      visitAdditions: [
+        { code: "MED_ADD_EMERGENCY_VISIT", status: "matched", amount: 900 },
+        { code: "MED_ADD_DEEP_NIGHT", status: "matched", amount: 800 }
+      ]
+    }
+  },
+  {
+    name: "加算E: 死亡日前10日・5日・当日に訪問 → ターミナルケア療養費（前14日2回以上を充足）",
+    patient: {
+      patient_id: "TM", birth_date: "1990-01-01", care_level: null,
+      designated_disease_hyou7: false, designated_disease_16_of_40to64: false, psychiatric_non_dementia: false,
+      death_date: "2026-07-15", terminal_consent: true,
+      instruction_sheet: { issued_date: "2026-06-01", valid_until: "2026-08-31", special_instruction_period: null }
+    },
+    visits: [
+      { visit_id: "VT-M1", patient_id: "TM", date: "2026-07-05", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false },
+      { visit_id: "VT-M2", patient_id: "TM", date: "2026-07-10", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false },
+      { visit_id: "VT-M3", patient_id: "TM", date: "2026-07-15", start_time: "10:00", duration_minutes: 40, role: "NS", same_building: false }
+    ],
+    probeVisitIndex: 2,
+    expect: {
+      insurance: "medical",
+      monthlyAdditions: [{ code: "MED_RYO_TERMINAL", statusNot: "needs_check", reasonIncludes: "2回以上" }]
+    }
   }
 ];
 
@@ -165,7 +279,12 @@ const SCENARIOS = [
 window.runTestSuite = function (Engine) {
   const results = [];
   for (const sc of SCENARIOS) {
-    const r = Engine.judgeVisit(sc.visit, sc.patient, TEST_OFFICE, TEST_MASTER);
+    const office = sc.office || TEST_OFFICE;
+    // 加算シナリオは visits（複数）を集計する。従来シナリオは単一 visit。
+    const visits = sc.visits || [sc.visit];
+    const probe = visits[sc.probeVisitIndex || 0];
+    const monthCtx = Engine.buildMonthContext(sc.patient.patient_id, visits, visits);
+    const r = Engine.judgeVisit(probe, sc.patient, office, TEST_MASTER, monthCtx);
     const checks = [];
 
     checks.push({
@@ -174,6 +293,38 @@ window.runTestSuite = function (Engine) {
       actual: r.insurance,
       pass: r.insurance === sc.expect.insurance
     });
+
+    // 訪問ごとの加算（probe 訪問）
+    if (sc.expect.visitAdditions) {
+      for (const exp of sc.expect.visitAdditions) {
+        const hit = (r.additions || []).find(x => x.item.code === exp.code);
+        checks.push({ label: `加算[${exp.code}]`, expected: exp.status, actual: hit ? hit.status : "(なし)", pass: hit && hit.status === exp.status });
+        if (hit && exp.amount != null) {
+          checks.push({ label: `加算額[${exp.code}]`, expected: String(exp.amount), actual: String(hit.amount), pass: hit.amount === exp.amount });
+        }
+      }
+    }
+
+    // 月次の加算・療養費
+    if (sc.expect.monthlyAdditions) {
+      const monthly = Engine.medMonthlyAdditions(sc.patient, office, TEST_MASTER, monthCtx, (probe.date || "").slice(0, 7));
+      for (const exp of sc.expect.monthlyAdditions) {
+        const hit = monthly.find(x => x.item.code === exp.code);
+        if (exp.status) {
+          checks.push({ label: `月次[${exp.code}]`, expected: exp.status, actual: hit ? hit.status : "(なし)", pass: hit && hit.status === exp.status });
+        }
+        if (exp.statusNot) {
+          checks.push({ label: `月次[${exp.code}]≠`, expected: "≠" + exp.statusNot, actual: hit ? hit.status : "(なし)", pass: hit && hit.status !== exp.statusNot });
+        }
+        if (hit && exp.amount != null) {
+          checks.push({ label: `月次額[${exp.code}]`, expected: String(exp.amount), actual: String(hit.amount), pass: hit.amount === exp.amount });
+        }
+        if (hit && exp.reasonIncludes) {
+          const ok = hit.reasons.some(s => s.indexOf(exp.reasonIncludes) >= 0);
+          checks.push({ label: `月次根拠[${exp.code}]`, expected: "含:" + exp.reasonIncludes, actual: ok ? "含む" : "含まない", pass: ok });
+        }
+      }
+    }
     if (sc.expect.hasConfirm) {
       checks.push({ label: "要確認あり", expected: "1件以上", actual: `${r.confirm.length}件`, pass: r.confirm.length > 0 });
     }

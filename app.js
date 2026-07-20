@@ -29,6 +29,36 @@ const CONDITION_LABELS = {
   "office.ptotst_ratio_exceeds_threshold": "理学療法士等の訪問割合が基準を超過"
 };
 
+/* 報酬マスタ項目の検証状態（3値）。official_confirmed のみ合計に含める。 */
+const VERIFICATION_LABELS = {
+  official_confirmed: "検証済",
+  needs_recheck: "要再確認",
+  unconfirmed: "未検証"
+};
+
+/* 複数名訪問看護加算の同行者職種（イ/ロ/ハ/ニの区分は一次資料で確認）。 */
+const PARTNER_ROLES = {
+  NS:  "看護師等",
+  PT:  "理学療法士等（PT/OT/ST）",
+  LPN: "准看護師",
+  AIDE: "看護補助者",
+  OTHER: "その他"
+};
+
+/* 訪問時に「実施した記録」のチェック項目。B群・C群の加算判定に使用する。
+   実施の有無は記録から入力する事実であり、本ツールが推測で埋めることはしない。 */
+const VISIT_ACTIVITIES = {
+  discharge_support:  "退院支援指導を実施",
+  home_liaison:       "在宅患者連携指導（歯科・薬局等との情報共有）を実施",
+  emergency_conf:     "在宅患者緊急時等カンファレンスを実施",
+  specialist_mgmt:    "専門管理（研修修了看護師による管理）を実施",
+  care_staff_liaison: "喀痰吸引等事業者との連携支援を実施",
+  info_provide_1:     "情報提供療養費Ⅰ（市町村等へ提供）",
+  info_provide_2:     "情報提供療養費Ⅱ（学校等へ提供）",
+  info_provide_3:     "情報提供療養費Ⅲ（転院・入院先医療機関へ提供）",
+  remote_death:       "遠隔死亡診断の補助を実施"
+};
+
 /* ============================ 汎用ヘルパー ============================ */
 
 function esc(s) {
@@ -50,6 +80,16 @@ function calcAge(birthDate, onDate) {
   return age >= 0 ? age : null;
 }
 
+/** ISO日付文字列に n 日を加減した ISO日付を返す（入力不備は元の文字列を返す） */
+function addDaysISO(iso, n) {
+  if (isBlank(iso)) return iso;
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return iso;
+  d.setDate(d.getDate() + n);
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 /** ISO日付文字列 date が period {start,end} 内か。判定不能は null */
 function isWithinPeriod(date, period) {
   if (!period || isBlank(period.start) || isBlank(period.end) || isBlank(date)) return null;
@@ -67,6 +107,15 @@ const Engine = {
     if (v === false) return "非該当";
     return "未確認";
   },
+
+  /** マスタ項目の検証状態（3値）。旧 verified(boolean) は後方互換でマッピング。 */
+  verState(item) {
+    if (item && item.verification_status) return item.verification_status;
+    if (item && item.verified === true) return "official_confirmed";
+    return "unconfirmed";
+  },
+  /** 合計に含めてよいか（告示本文で確認済み かつ 金額あり のみ true） */
+  isOfficial(item) { return Engine.verState(item) === "official_confirmed"; },
 
   /**
    * 保険種別判定
@@ -325,23 +374,27 @@ const Engine = {
       confirms.push("金額（単価・点数・単位数）がマスタ未設定");
     }
 
-    if (!item.verified) {
-      confirms.push("この項目は未検証です（一次資料と照合し verified を true にするまで合計に含めません）");
+    const vstate = Engine.verState(item);
+    if (vstate !== "official_confirmed") {
+      confirms.push(vstate === "needs_recheck"
+        ? "この項目は令和8年度改定で変更の可能性があり要再確認です（一次資料と照合するまで合計に含めません）"
+        : "この項目は未検証です（一次資料と照合し検証済にするまで合計に含めません）");
     }
 
     let status;
     if (excluded) status = "excluded";
     else if (unknown) status = "needs_check";
-    else if (item.verified && amount != null) status = "matched";
+    else if (vstate === "official_confirmed" && amount != null) status = "matched";
     else status = "matched_unconfirmed";
 
     return { status, amount, reasons, confirms };
   },
 
   /**
-   * 訪問1件の総合判定：保険種別 → 基本報酬・減算・加算の評価 → 合計
+   * 訪問1件の総合判定：保険種別 → 基本報酬・減算の評価 → 合計 → 訪問ごとの医療加算
+   * monthCtx（同一利用者・同一月の集計）が渡された場合のみ、訪問ごとの医療加算を評価する。
    */
-  judgeVisit(visit, patient, office, master) {
+  judgeVisit(visit, patient, office, master, monthCtx) {
     const result = {
       visit, patient,
       insurance: null,
@@ -349,6 +402,7 @@ const Engine = {
       timeBand: null,
       sheetWarnings: [],
       items: { applied: [], unconfirmed: [], needsCheck: [], excluded: [] },
+      additions: [],
       total: { confirmed: 0, unit: null, complete: false },
       confirm: []
     };
@@ -376,6 +430,9 @@ const Engine = {
     const units = new Set();
     for (const item of master.items) {
       if (item.insurance_type !== result.insurance) continue;
+      // 医療保険の加算・療養費は専用の加算エンジン（medVisitAdditions/medMonthlyAdditions）で
+      // 評価するため、基本報酬ループでは二重に処理しない。
+      if (result.insurance === "medical" && (item.category === "addition" || item.category === "ryoyohi")) continue;
       const ev = Engine.evaluateItem(item, ctx);
       const row = { item, ...ev };
       if (ev.status === "matched") {
@@ -398,7 +455,311 @@ const Engine = {
     if (nCheck > 0) {
       result.confirm.push(`評価できない・未検証の項目が${nCheck}件あります（合計は確定金額のみの参考値です）`);
     }
+
+    // 医療保険：訪問ごとに算定する加算（A群）。月コンテキストがある場合のみ評価。
+    if (result.insurance === "medical" && monthCtx) {
+      result.additions = Engine.medVisitAdditions(visit, patient, office, master, monthCtx);
+    }
     return result;
+  },
+
+  /* ===================== 医療保険 加算判定（A〜C群） =====================
+   * すべて決定的なルールベース。金額はマスタから取得し、未設定は null のまま
+   * 「要確認」として出力する（推測で埋めない）。実施の有無は記録からの入力事実。 */
+
+  /** 同一利用者・同一月の訪問を集計したコンテキストを作る。
+   *  allVisits を渡すと、月をまたぐ判定（ターミナル死亡前14日等）にも対応する。 */
+  buildMonthContext(patientId, monthVisits, allVisits) {
+    const mv = monthVisits
+      .filter(v => v.patient_id === patientId)
+      .slice()
+      .sort((a, b) => (a.date + (a.start_time || "")).localeCompare(b.date + (b.start_time || "")));
+    const byDate = {};
+    mv.forEach(v => { (byDate[v.date] = byDate[v.date] || []).push(v); });
+    const emergencyDates = [...new Set(mv.filter(v => v.is_emergency).map(v => v.date))].sort();
+    const av = (allVisits || monthVisits).filter(v => v.patient_id === patientId);
+    return { patientId, visits: mv, allVisits: av, byDate, emergencyDates };
+  },
+
+  /** 加算1件分の結果行を作る。master に該当コードがなければ最小の item を合成する。 */
+  addRow(master, code, name, res) {
+    const item = (master.items || []).find(i => i.code === code)
+      || { code, name_ja: name, unit: null, source_reference: null, verification_status: "unconfirmed" };
+    return {
+      item,
+      status: res.status,
+      amount: res.amount == null ? null : res.amount,
+      reasons: res.reasons || [],
+      confirms: res.confirms || []
+    };
+  },
+
+  /** 加算の状態を決める。missing=判定に必要な入力が欠けている。 */
+  addStatus(item, amount, missing) {
+    if (missing) return "needs_check";
+    if (item && Engine.isOfficial(item) && amount != null) return "matched";
+    return "matched_unconfirmed";
+  },
+
+  /** 訪問ごとの医療加算（A群）を評価して行の配列を返す。 */
+  medVisitAdditions(visit, patient, office, master, ctx) {
+    const rows = [];
+    const items = master.items || [];
+    const find = (code) => items.find(i => i.code === code) || null;
+    const tier = (item, key) => (item && item.amount_tiers) ? item.amount_tiers[key] : null;
+    const push = (code, name, res) => rows.push(Engine.addRow(master, code, name, res));
+
+    const sp = patient.instruction_sheet && patient.instruction_sheet.special_instruction_period;
+    const inSpecial = isWithinPeriod(visit.date, sp) === true;
+    const hyou7 = patient.designated_disease_hyou7;
+    const sameBuilding = visit.same_building === true;
+
+    /* 1. 緊急訪問看護加算（当月の緊急訪問通算日数で14日目境界） */
+    if (visit.is_emergency === true) {
+      const item = find("MED_ADD_EMERGENCY_VISIT");
+      const reasons = [], confirms = [];
+      const idx = ctx.emergencyDates.indexOf(visit.date) + 1;
+      let amount = null;
+      if (idx >= 1) {
+        const within14 = idx <= 14;
+        reasons.push(`当月${idx}日目の緊急訪問（${within14 ? "14日目まで" : "15日目以降"}の区分）`);
+        amount = tier(item, within14 ? "within_14days" : "from_15th_day");
+      }
+      let missing = false;
+      const reg = office ? office.system_24h_registered : null;
+      if (reg === true) reasons.push("24時間対応体制の届出あり");
+      else if (reg === false) confirms.push("24時間対応体制の届出がないため算定できない可能性（要確認）");
+      else { confirms.push("24時間対応体制の届出状況が未確認（事業所設定で入力）"); missing = true; }
+      if (amount == null) confirms.push("金額がマスタ未設定");
+      push("MED_ADD_EMERGENCY_VISIT", "緊急訪問看護加算", { status: Engine.addStatus(item, amount, missing), amount, reasons, confirms });
+    }
+
+    /* 2. 長時間訪問看護加算（90分超・週回数制限） */
+    if (visit.duration_minutes != null && visit.duration_minutes > 90) {
+      const item = find("MED_ADD_LONG_VISIT");
+      const reasons = [`所要時間${visit.duration_minutes}分（90分超）`], confirms = [];
+      const special = hyou7 === true || inSpecial;
+      reasons.push(special ? "別表7該当または特別指示期間中（週3日まで対象の可能性）" : "対象者区分は標準（原則週1日）と推定");
+      confirms.push("対象者区分（週1日／週3日）と当週の算定回数上限は一次資料で確認");
+      const amount = item ? item.amount : null;
+      if (amount == null) confirms.push("金額がマスタ未設定");
+      push("MED_ADD_LONG_VISIT", "長時間訪問看護加算", { status: Engine.addStatus(item, amount, false), amount, reasons, confirms });
+    }
+
+    /* 3. 乳幼児加算（6歳未満） */
+    const age = calcAge(patient.birth_date, visit.date);
+    if (age === null) {
+      // 生年月日未入力：6歳未満かもしれないため要確認（保険種別側でも警告済み）
+    } else if (age < 6) {
+      const item = find("MED_ADD_INFANT");
+      const reasons = [`訪問日時点${age}歳（6歳未満）`], confirms = [];
+      confirms.push("対象者区分（標準／別表7・特別管理等による上位区分）は一次資料で確認");
+      const amount = tier(item, "standard");
+      if (amount == null) confirms.push("金額がマスタ未設定");
+      push("MED_ADD_INFANT", "乳幼児加算", { status: Engine.addStatus(item, amount, false), amount, reasons, confirms });
+    }
+
+    /* 4. 難病等複数回訪問加算（別表7該当 or 特別指示期間中 かつ 当日2回以上） */
+    const todays = (ctx.byDate[visit.date] || []).length;
+    if ((hyou7 === true || inSpecial) && todays >= 2) {
+      const item = find("MED_ADD_MULTI_VISIT_INTRACTABLE");
+      const reasons = [], confirms = [];
+      reasons.push(hyou7 === true ? "別表7該当" : "特別訪問看護指示書の交付期間中");
+      reasons.push(`当日の訪問回数 ${todays}回`);
+      const three = todays >= 3;
+      const key = (three ? "visits3plus_" : "visits2_") + (sameBuilding ? "same" : "other");
+      reasons.push(`区分: ${three ? "3回以上" : "2回"} × ${sameBuilding ? "同一建物" : "同一建物以外"}`);
+      let missing = false;
+      if (visit.same_building == null) { confirms.push("同一建物居住者か否かが未入力（区分判定に必要）"); missing = true; }
+      const amount = tier(item, key);
+      if (amount == null) confirms.push("金額がマスタ未設定");
+      push("MED_ADD_MULTI_VISIT_INTRACTABLE", "難病等複数回訪問加算", { status: Engine.addStatus(item, amount, missing), amount, reasons, confirms });
+    } else if ((hyou7 === true || inSpecial) && todays < 2) {
+      // 対象者ではあるが当日1回：非該当のため表示しない
+    }
+
+    /* 5. 複数名訪問看護加算（同行者あり） */
+    if (visit.accompanied === true) {
+      const item = find("MED_ADD_MULTI_STAFF");
+      const reasons = [], confirms = [];
+      const pr = visit.partner_role;
+      reasons.push(`同行者: ${PARTNER_ROLES[pr] || "未入力"}`);
+      let missing = false;
+      if (!pr) { confirms.push("同行者の職種が未入力（イ／ロ／ハ／ニの区分に必要）"); missing = true; }
+      else confirms.push("同行職種と区分（イ／ロ／ハ／ニ）の対応・当日/週の算定回数は一次資料で確認");
+      confirms.push("金額がマスタ未設定");
+      push("MED_ADD_MULTI_STAFF", "複数名訪問看護加算", { status: Engine.addStatus(item, null, missing), amount: null, reasons, confirms });
+    }
+
+    /* 6. 夜間・早朝／深夜訪問看護加算（時間帯区分は master の定義に依存） */
+    if (!isBlank(visit.start_time)) {
+      const tb = Engine.getTimeBand(visit, master);
+      if (tb.band === "deep_night") {
+        const item = find("MED_ADD_DEEP_NIGHT");
+        const amount = item ? item.amount : null;
+        const confirms = amount == null ? ["金額がマスタ未設定"] : [];
+        push("MED_ADD_DEEP_NIGHT", "深夜訪問看護加算", { status: Engine.addStatus(item, amount, false), amount, reasons: [`開始時刻 ${visit.start_time}（深夜帯）`], confirms });
+      } else if (tb.band === "early_morning" || tb.band === "night") {
+        const item = find("MED_ADD_NIGHT_EARLY");
+        const amount = item ? item.amount : null;
+        const confirms = amount == null ? ["金額がマスタ未設定"] : [];
+        push("MED_ADD_NIGHT_EARLY", "夜間・早朝訪問看護加算", { status: Engine.addStatus(item, amount, false), amount, reasons: [`開始時刻 ${visit.start_time}（夜間・早朝帯）`], confirms });
+      } else if (tb.band === null) {
+        // 時間帯区分の定義がマスタ未設定 → 判定不能
+        push("MED_ADD_NIGHT_EARLY", "夜間・早朝／深夜訪問看護加算", { status: "needs_check", amount: null, reasons: [`開始時刻 ${visit.start_time}`], confirms: [tb.confirm || "時間帯区分の境界時刻がマスタ未設定（要確認）"] });
+      }
+    }
+
+    /* 7. 特別地域訪問看護加算（事業所が特別地域指定 かつ 移動1時間以上） */
+    if (office && office.special_area === true) {
+      const item = find("MED_ADD_SPECIAL_AREA");
+      const confirms = ["事業所からの移動時間が1時間以上であることの記録を確認", "算定率（所定額の50%）と金額をマスタで確認"];
+      push("MED_ADD_SPECIAL_AREA", "特別地域訪問看護加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: ["事業所が特別地域の指定に該当"], confirms });
+    }
+
+    return rows;
+  },
+
+  /** 月次で算定する医療加算（B群）と独立療養費（C群）を、利用者・月単位で評価する。 */
+  medMonthlyAdditions(patient, office, master, ctx, month) {
+    const rows = [];
+    const items = master.items || [];
+    const find = (code) => items.find(i => i.code === code) || null;
+    const tier = (item, key) => (item && item.amount_tiers) ? item.amount_tiers[key] : null;
+    const push = (code, name, res) => rows.push(Engine.addRow(master, code, name, res));
+    const hyou7 = patient.designated_disease_hyou7;
+    // 当月の訪問で「実施した記録」に含まれる活動キーの集合
+    const recorded = {};
+    ctx.visits.forEach(v => (v.recorded_activities || []).forEach(k => { recorded[k] = (recorded[k] || 0) + 1; }));
+    const has = (k) => !!recorded[k];
+
+    /* 8. 24時間対応体制加算 */
+    {
+      const reg = office ? office.system_24h_registered : null;
+      const consent = patient.consent_24h;
+      if (reg === true || consent === true) {
+        const item = find("MED_ADD_24H_SYSTEM");
+        const reasons = [], confirms = [];
+        let missing = false;
+        if (reg === true) reasons.push("事業所が24時間対応体制を届出済み");
+        else { confirms.push("24時間対応体制の届出状況が未確認（事業所設定）"); missing = true; }
+        if (consent === true) reasons.push("利用者の同意あり");
+        else if (consent === false) confirms.push("利用者の同意がないため算定不可（要確認）");
+        else { confirms.push("利用者の同意有無が未確認"); missing = true; }
+        confirms.push("業務負担軽減の取組の有無で金額区分（区分は一次資料で確認）／金額がマスタ未設定");
+        push("MED_ADD_24H_SYSTEM", "24時間対応体制加算", { status: Engine.addStatus(item, null, missing), amount: null, reasons, confirms });
+      }
+    }
+
+    /* 9. 特別管理加算（別表8。重症度の高いものは上位区分） */
+    if (patient.beppyou8_applicable === true) {
+      const item = find("MED_ADD_SPECIAL_MGMT");
+      const severe = patient.beppyou8_severe;
+      const reasons = ["別表8に該当（指示書の記載に基づく）"], confirms = [];
+      let key, missing = false;
+      if (severe === true) { key = "severe"; reasons.push("うち重症度等の高いものに該当 → 上位区分（5,000円相当）"); }
+      else if (severe === false) { key = "standard"; reasons.push("重症度等の高いものには非該当 → 標準区分（2,500円相当）"); }
+      else { key = "standard"; confirms.push("「重症度等の高いもの」該当有無が未確認（標準/上位の区分に必要）"); missing = true; }
+      if (patient.beppyou8_items) reasons.push(`該当項目（記載）: ${patient.beppyou8_items}`);
+      const amount = tier(item, key);
+      if (amount == null) confirms.push("金額がマスタ未設定");
+      push("MED_ADD_SPECIAL_MGMT", "特別管理加算", { status: Engine.addStatus(item, amount, missing), amount, reasons, confirms });
+    } else if (patient.beppyou8_applicable == null) {
+      const item = find("MED_ADD_SPECIAL_MGMT");
+      push("MED_ADD_SPECIAL_MGMT", "特別管理加算", { status: "needs_check", amount: null, reasons: [], confirms: ["別表8該当有無が未確認（利用者マスタで指示書の記載を入力）"] });
+    }
+
+    /* 10. 退院時共同指導加算（＋特別管理指導加算） */
+    if (patient.discharge_joint_guidance === true) {
+      const item = find("MED_ADD_DISCHARGE_JOINT");
+      const reasons = ["退院時共同指導を実施"], confirms = [];
+      reasons.push(hyou7 === true ? "別表7該当のため月2回まで算定可（要確認）" : "原則月1回");
+      if (patient.beppyou8_applicable === true) reasons.push("別表8該当 → 特別管理指導加算を別途算定可（金額別途・要確認）");
+      confirms.push("金額がマスタ未設定");
+      push("MED_ADD_DISCHARGE_JOINT", "退院時共同指導加算", { status: Engine.addStatus(item, null, false), amount: null, reasons, confirms });
+    }
+
+    /* 11. 退院支援指導加算 */
+    if (!isBlank(patient.discharge_date) && has("discharge_support")) {
+      const item = find("MED_ADD_DISCHARGE_SUPPORT");
+      const confirms = ["長時間の指導かどうかで金額区分（標準／長時間）を一次資料で確認", "金額がマスタ未設定"];
+      push("MED_ADD_DISCHARGE_SUPPORT", "退院支援指導加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: [`退院日 ${patient.discharge_date}・退院支援指導の実施記録あり`], confirms });
+    }
+
+    /* 12. 在宅患者連携指導加算（月1回） */
+    if (has("home_liaison")) {
+      const item = find("MED_ADD_HOME_LIAISON");
+      push("MED_ADD_HOME_LIAISON", "在宅患者連携指導加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: ["歯科・薬局等との情報共有の記録あり（月1回）"], confirms: ["金額がマスタ未設定"] });
+    }
+
+    /* 13. 在宅患者緊急時等カンファレンス加算（月2回まで） */
+    if (has("emergency_conf")) {
+      const item = find("MED_ADD_EMERGENCY_CONF");
+      const n = recorded["emergency_conf"];
+      const confirms = ["金額がマスタ未設定"];
+      if (n > 2) confirms.push(`当月の実施 ${n}回。月2回までの上限を超えています（要確認）`);
+      push("MED_ADD_EMERGENCY_CONF", "在宅患者緊急時等カンファレンス加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: [`共同カンファレンスの実施記録 ${n}回`], confirms });
+    }
+
+    /* 14. 専門管理加算（月1回） */
+    if (has("specialist_mgmt")) {
+      const item = find("MED_ADD_SPECIALIST_MGMT");
+      push("MED_ADD_SPECIALIST_MGMT", "専門管理加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: ["研修修了看護師による専門管理の記録あり"], confirms: ["担当看護師の研修修了・対象者の状態要件を一次資料で確認", "金額がマスタ未設定"] });
+    }
+
+    /* 15. 看護・介護職員連携強化加算（月1回） */
+    if (has("care_staff_liaison")) {
+      const item = find("MED_ADD_CARE_STAFF_LIAISON");
+      push("MED_ADD_CARE_STAFF_LIAISON", "看護・介護職員連携強化加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: ["喀痰吸引等事業者との連携支援の記録あり"], confirms: ["金額がマスタ未設定"] });
+    }
+
+    /* 16. 訪問看護医療DX情報活用加算（月1回） */
+    {
+      const reg = office ? office.dx_info_registered : null;
+      if (reg === true) {
+        const item = find("MED_ADD_DX_INFO");
+        push("MED_ADD_DX_INFO", "訪問看護医療DX情報活用加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: ["事業所がオンライン請求・オンライン資格確認体制を届出済み"], confirms: ["金額がマスタ未設定"] });
+      } else if (reg == null && ctx.visits.length > 0) {
+        const item = find("MED_ADD_DX_INFO");
+        push("MED_ADD_DX_INFO", "訪問看護医療DX情報活用加算", { status: "needs_check", amount: null, reasons: [], confirms: ["医療DX情報活用の届出状況が未確認（事業所設定）"] });
+      }
+    }
+
+    /* 17. 訪問看護情報提供療養費Ⅰ／Ⅱ／Ⅲ（提供先区分） */
+    [["info_provide_1", "i", "Ⅰ（市町村等）"], ["info_provide_2", "ii", "Ⅱ（学校等）"], ["info_provide_3", "iii", "Ⅲ（転院・入院先医療機関）"]].forEach(([k, key, label]) => {
+      if (has(k)) {
+        const item = find("MED_RYO_INFO_PROVIDE");
+        const amount = tier(item, key);
+        const confirms = amount == null ? ["金額がマスタ未設定"] : [];
+        push("MED_RYO_INFO_PROVIDE", `訪問看護情報提供療養費${label}`, { status: Engine.addStatus(item, amount, false), amount, reasons: ["情報提供の実施記録あり"], confirms });
+      }
+    });
+
+    /* 18. 訪問看護ターミナルケア療養費（死亡日前14日以内に2回以上の訪問） */
+    if (!isBlank(patient.death_date)) {
+      const item = find("MED_RYO_TERMINAL");
+      const from = addDaysISO(patient.death_date, -14);
+      const n = ctx.allVisits.filter(v => v.date >= from && v.date <= patient.death_date).length;
+      const reasons = [`死亡日 ${patient.death_date}／前14日以内の訪問 ${n}回`], confirms = [];
+      let missing = false;
+      if (n >= 2) reasons.push("死亡日前14日以内に2回以上の訪問（要件充足の見込み）");
+      else { confirms.push("死亡日前14日以内の訪問が2回未満のため要件を満たさない可能性（要確認）"); }
+      if (patient.terminal_consent === true) reasons.push("説明・同意の記録あり");
+      else if (patient.terminal_consent === false) confirms.push("説明・同意の記録がないため算定不可（要確認）");
+      else { confirms.push("説明・同意の記録有無が未確認"); missing = true; }
+      confirms.push("療養費Ⅰ／Ⅱの区分（事業所区分等）と金額を一次資料で確認");
+      push("MED_RYO_TERMINAL", "訪問看護ターミナルケア療養費", { status: n >= 2 ? Engine.addStatus(item, null, missing) : "needs_check", amount: null, reasons, confirms });
+    }
+
+    /* 19. 遠隔死亡診断補助加算 */
+    if (has("remote_death")) {
+      const item = find("MED_ADD_REMOTE_DEATH");
+      const confirms = ["特定行為研修修了看護師による実施であることを確認", "金額がマスタ未設定"];
+      if (!(office && office.special_area === true)) confirms.push("特別地域該当の要件を確認");
+      push("MED_ADD_REMOTE_DEATH", "遠隔死亡診断補助加算", { status: Engine.addStatus(item, null, false), amount: null, reasons: ["遠隔死亡診断の補助の実施記録あり"], confirms });
+    }
+
+    return rows;
   }
 };
 
@@ -418,6 +779,9 @@ const state = {
   office: loadJSON(STORE_KEYS.office, {
     urgent_visit_registered: null,
     ptotst_visit_ratio: null,
+    system_24h_registered: null,   // 24時間対応体制加算（医療）の届出
+    dx_info_registered: null,      // 訪問看護医療DX情報活用加算の届出
+    special_area: null,            // 特別地域の指定に該当
     notes: ""
   }),
   patients: loadJSON(STORE_KEYS.patients, []),
@@ -485,6 +849,12 @@ function triFromForm(v) { return v === "true" ? true : v === "false" ? false : n
 function insuranceChip(ins) {
   const cls = ins === "medical" ? "chip-medical" : ins === "kaigo" ? "chip-kaigo" : "chip-confirm";
   return `<span class="chip ${cls}">${INSURANCE_LABEL[ins] || "要確認"}</span>`;
+}
+
+/** マスタ検証状態（3値）のチップ */
+function verChip(state) {
+  const cls = state === "official_confirmed" ? "chip-ok" : state === "needs_recheck" ? "chip-recheck" : "chip-confirm";
+  return `<span class="chip ${cls}">${VERIFICATION_LABELS[state] || "未検証"}</span>`;
 }
 
 function confirmBadge(text) { return `<span class="chip chip-confirm">要確認</span> ${esc(text)}`; }
@@ -729,8 +1099,8 @@ let judgePatient = "";
 
 function renderJudge() {
   const master = activeMaster();
-  const visits = state.visits
-    .filter(v => v.date && v.date.startsWith(judgeMonth))
+  const monthVisits = state.visits.filter(v => v.date && v.date.startsWith(judgeMonth));
+  const visits = monthVisits
     .filter(v => !judgePatient || v.patient_id === judgePatient)
     .sort((a, b) => (a.date + (a.start_time || "")).localeCompare(b.date + (b.start_time || "")));
 
@@ -738,11 +1108,16 @@ function renderJudge() {
     .concat(state.patients.map(p => `<option value="${esc(p.patient_id)}" ${p.patient_id === judgePatient ? "selected" : ""}>${esc(p.patient_id)}</option>`))
     .join("");
 
+  // 利用者ごとの月コンテキストを一度だけ構築（訪問ごと加算の月次・週次集計に使用）
+  const ctxCache = {};
+  const monthCtxFor = (pid) => (ctxCache[pid] || (ctxCache[pid] = Engine.buildMonthContext(pid, monthVisits, state.visits)));
+
   let rows = "";
   let detail = "";
   for (const v of visits) {
     const p = state.patients.find(x => x.patient_id === v.patient_id);
-    const r = Engine.judgeVisit(v, p, state.office, master);
+    const r = Engine.judgeVisit(v, p, state.office, master, p ? monthCtxFor(v.patient_id) : null);
+    const nAdd = (r.additions || []).length;
     const nConfirm = r.confirm.length + r.sheetWarnings.length;
     const totalCell = r.insurance === "unknown"
       ? "—"
@@ -756,6 +1131,7 @@ function renderJudge() {
       <td class="num">${esc(v.duration_minutes ?? "")}分</td>
       <td>${insuranceChip(r.insurance)}</td>
       <td class="num">${r.items.applied.length}/${r.items.unconfirmed.length + r.items.needsCheck.length}</td>
+      <td class="num">${nAdd ? `<span class="chip chip-add">加算 ${nAdd}</span>` : '<span class="muted">—</span>'}</td>
       <td>${nConfirm ? `<span class="chip chip-confirm">要確認 ${nConfirm}</span>` : '<span class="chip chip-ok">なし</span>'}</td>
       <td class="num">${totalCell}</td>
     </tr>`;
@@ -775,12 +1151,69 @@ function renderJudge() {
     ${visits.length === 0
       ? `<p class="empty">この条件の訪問記録がありません。「訪問記録」タブから登録してください。</p>`
       : `<div class="table-scroll"><table class="data">
-          <thead><tr><th>訪問日</th><th>利用者ID</th><th>職種</th><th>時間</th><th>保険種別</th><th>適用/未確定</th><th>要確認</th><th>確定合計</th></tr></thead>
+          <thead><tr><th>訪問日</th><th>利用者ID</th><th>職種</th><th>時間</th><th>保険種別</th><th>適用/未確定</th><th>加算</th><th>要確認</th><th>確定合計</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
-        <p class="hint">行をタップすると判定の詳細（根拠トレース）を表示します。「適用/未確定」は 確定した項目数/要確認の項目数 です。</p>`}
+        <p class="hint">行をタップすると判定の詳細（根拠トレース・加算）を表示します。「適用/未確定」は 確定した項目数/要確認の項目数、「加算」は訪問ごとの医療加算の候補件数です。</p>`}
     ${detail}
+    ${renderMonthlyAdditions(monthVisits, master)}
   </section>`;
+}
+
+/* 月次で算定する医療加算（B群）・独立療養費（C群）を利用者ごとに表示する。 */
+function renderMonthlyAdditions(monthVisits, master) {
+  // 当月に医療保険の訪問がある利用者を対象にする
+  const pids = [...new Set(monthVisits.map(v => v.patient_id))]
+    .filter(pid => !judgePatient || pid === judgePatient);
+  let blocks = "";
+  for (const pid of pids) {
+    const p = state.patients.find(x => x.patient_id === pid);
+    if (!p) continue;
+    // その利用者の当月訪問が医療保険になるものが1件でもあるか
+    const anyMedical = monthVisits.some(v => v.patient_id === pid &&
+      Engine.judgeInsurance(p, v.date).insurance === "medical");
+    if (!anyMedical) continue;
+    const ctx = Engine.buildMonthContext(pid, monthVisits, state.visits);
+    const rows = Engine.medMonthlyAdditions(p, state.office, master, ctx, judgeMonth);
+    if (rows.length === 0) continue;
+    blocks += `
+      <div class="month-add-block">
+        <h4>${esc(pid)}</h4>
+        ${rows.map(row => feeItemHTML(row, statusClass(row.status))).join("")}
+      </div>`;
+  }
+  if (!blocks) return "";
+  return `
+    <div class="detail">
+      <h3>月次の医療加算・療養費（${esc(judgeMonth)}・利用者ごと）</h3>
+      <p class="hint">月単位で算定する加算（24時間対応体制・特別管理・退院時共同指導 等）と独立した療養費（ターミナルケア・情報提供 等）の候補です。実施記録の有無は「訪問記録」タブの各訪問で入力します。金額はマスタ未設定のため参考表示です。</p>
+      ${blocks}
+    </div>`;
+}
+
+/** 加算の状態→CSSクラス */
+function statusClass(status) {
+  return status === "matched" ? "st-applied"
+    : status === "needs_check" ? "st-check"
+    : status === "excluded" ? "st-excluded"
+    : "st-unconfirmed";
+}
+
+/** 加算・報酬項目1件のHTML（判定詳細と月次加算で共用） */
+function feeItemHTML(row, cls) {
+  return `
+    <div class="fee-item ${cls}">
+      <div class="fee-head">
+        <strong>${esc(row.item.name_ja)}</strong>
+        <span class="code">${esc(row.item.code)}</span>
+        ${row.amount != null ? `<span class="num">${esc(row.amount)}${esc(row.item.unit || "")}</span>` : `<span class="chip chip-confirm">金額未設定</span>`}
+      </div>
+      <ul class="reason-list">
+        ${row.reasons.map(x => `<li class="reason">${esc(x)}</li>`).join("")}
+        ${row.confirms.map(x => `<li class="need-confirm">${confirmBadge(x)}</li>`).join("")}
+      </ul>
+      ${row.item.source_reference ? `<p class="source">根拠: ${esc(row.item.source_reference)}</p>` : `<p class="source need-confirm-text">根拠告示・通知番号: 未設定（要確認）</p>`}
+    </div>`;
 }
 
 function renderVisitDetail(r) {
@@ -794,19 +1227,18 @@ function renderVisitDetail(r) {
 
   const itemGroup = (title, rows, cls) => rows.length === 0 ? "" : `
     <h4 class="${cls}">${title}（${rows.length}件）</h4>
-    ${rows.map(row => `
-      <div class="fee-item ${cls}">
-        <div class="fee-head">
-          <strong>${esc(row.item.name_ja)}</strong>
-          <span class="code">${esc(row.item.code)}</span>
-          ${row.amount != null ? `<span class="num">${esc(row.amount)}${esc(row.item.unit || "")}</span>` : `<span class="chip chip-confirm">金額未設定</span>`}
-        </div>
-        <ul class="reason-list">
-          ${row.reasons.map(x => `<li class="reason">${esc(x)}</li>`).join("")}
-          ${row.confirms.map(x => `<li class="need-confirm">${confirmBadge(x)}</li>`).join("")}
-        </ul>
-        ${row.item.source_reference ? `<p class="source">根拠: ${esc(row.item.source_reference)}</p>` : `<p class="source need-confirm-text">根拠告示・通知番号: 未設定（要確認）</p>`}
-      </div>`).join("")}`;
+    ${rows.map(row => feeItemHTML(row, cls)).join("")}`;
+
+  // 訪問ごとの医療加算（A群）を状態別にまとめる
+  const add = r.additions || [];
+  const addApplied = add.filter(x => x.status === "matched");
+  const addUnconf = add.filter(x => x.status === "matched_unconfirmed");
+  const addCheck = add.filter(x => x.status === "needs_check");
+  const additionsSection = add.length === 0 ? "" : `
+    <h4 class="add-head">訪問ごとの医療加算（候補 ${add.length}件）</h4>
+    ${itemGroup("適用（確定）", addApplied, "st-applied")}
+    ${itemGroup("該当見込み・金額または検証が未確定", addUnconf, "st-unconfirmed")}
+    ${itemGroup("判定不能（入力・マスタの不足）", addCheck, "st-check")}`;
 
   return `
   <div class="detail">
@@ -835,6 +1267,7 @@ function renderVisitDetail(r) {
       ${itemGroup("該当見込み・金額または検証が未確定", r.items.unconfirmed, "st-unconfirmed")}
       ${itemGroup("判定不能（入力・マスタの不足）", r.items.needsCheck, "st-check")}
       ${itemGroup("非該当", r.items.excluded, "st-excluded")}
+      ${additionsSection}
       <p class="total-line">確定合計: <strong>${r.total.confirmed}${r.total.unit ? " " + esc(r.total.unit) : ""}</strong>
         ${r.total.complete ? "" : `<span class="chip chip-confirm">未確定項目あり・参考値</span>`}</p>
     `}
@@ -917,12 +1350,28 @@ function renderPatients() {
         </select>
       </label>
       <label>別表7（厚労大臣が定める疾病等）該当 ${triSelect("designated_disease_hyou7", s.designated_disease_hyou7)}</label>
+      <label>別表7の記載病名（指示書の記載をそのまま。任意） <input name="hyou7_disease_written" value="${esc(s.hyou7_disease_written || "")}" placeholder="指示書に別表7の疾病等が記載されていれば入力"></label>
       <label>介護保険の特定疾病（16疾病）該当 ※40〜64歳で使用 ${triSelect("designated_disease_16_of_40to64", s.designated_disease_16_of_40to64)}</label>
       <label>精神科訪問看護の対象（認知症を除く） ${triSelect("psychiatric_non_dementia", s.psychiatric_non_dementia)}</label>
+
+      <label class="section-label wide">── 特別管理加算（別表8）※指示書の記載をそのまま入力 ──</label>
+      <label>別表8（特別な管理を要する状態等）該当 ${triSelect("beppyou8_applicable", s.beppyou8_applicable)}</label>
+      <label>うち重症度等の高いものに該当（上位区分5,000円） ${triSelect("beppyou8_severe", s.beppyou8_severe)}</label>
+      <label class="wide">別表8の該当項目（記載どおり・参考） <input name="beppyou8_items" value="${esc(s.beppyou8_items || "")}" placeholder="例: 真皮を越える褥瘡、留置カテーテル 等"></label>
+
+      <label class="section-label wide">── 指示書・特別指示 ──</label>
       <label>指示書 交付日 <input type="date" name="issued_date" value="${esc(sheet.issued_date || "")}"></label>
       <label>指示書 有効期限 <input type="date" name="valid_until" value="${esc(sheet.valid_until || "")}"></label>
       <label>特別指示書 開始日 <input type="date" name="sp_start" value="${esc(sp.start || "")}"></label>
       <label>特別指示書 終了日 <input type="date" name="sp_end" value="${esc(sp.end || "")}"></label>
+
+      <label class="section-label wide">── 24時間対応体制・退院・ターミナル（医療加算用） ──</label>
+      <label>24時間対応体制への同意（利用者） ${triSelect("consent_24h", s.consent_24h)}</label>
+      <label>退院日 <input type="date" name="discharge_date" value="${esc(s.discharge_date || "")}"></label>
+      <label>退院時共同指導を実施 ${triSelect("discharge_joint_guidance", s.discharge_joint_guidance)}</label>
+      <label>死亡日（ターミナルケア判定用） <input type="date" name="death_date" value="${esc(s.death_date || "")}"></label>
+      <label>ターミナルケアの説明・同意の記録 ${triSelect("terminal_consent", s.terminal_consent)}</label>
+
       <label class="wide">メモ（病状の詳細・氏名は書かないでください）<input name="notes" value="${esc(s.notes || "")}"></label>
       <div class="wide">
         <button class="btn btn-primary" type="submit">${p ? "更新" : "登録"}</button>
@@ -971,6 +1420,24 @@ function renderVisits() {
       <label>同一建物居住者
         <select name="same_building"><option value="null">未確認</option><option value="false" selected>非該当</option><option value="true">該当</option></select>
       </label>
+      <label>同一建物での訪問人数（複数名・難病等複数回の区分用・任意） <input type="number" name="same_building_count" min="1" placeholder="同一建物該当時のみ"></label>
+
+      <label class="section-label wide">── 医療加算に関わる記録 ──</label>
+      <label>緊急訪問（計画外の緊急訪問）
+        <select name="is_emergency"><option value="false" selected>いいえ</option><option value="true">はい</option></select>
+      </label>
+      <label>緊急訪問の受信時刻（任意） <input type="time" name="emergency_contact_time"></label>
+      <label>複数名訪問（同行者あり）
+        <select name="accompanied"><option value="false" selected>いいえ</option><option value="true">はい</option></select>
+      </label>
+      <label>同行者の職種（複数名訪問時）
+        <select name="partner_role"><option value="">未選択</option>${Object.entries(PARTNER_ROLES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+      </label>
+      <fieldset class="wide activity-set">
+        <legend>この訪問で実施した記録（該当するものにチェック）</legend>
+        ${Object.entries(VISIT_ACTIVITIES).map(([k, v]) => `<label class="chk"><input type="checkbox" name="act_${k}"> ${esc(v)}</label>`).join("")}
+      </fieldset>
+
       <label class="wide">訪問内容 <input name="purpose" placeholder="リハビリテーション 等"></label>
       <div class="wide"><button class="btn btn-primary" type="submit">記録する</button></div>
     </form>`}
@@ -986,7 +1453,10 @@ function renderOffice() {
     <div class="panel-head"><h2>事業所マスタ（届出状況）</h2></div>
     <p class="hint">届出状況が「未確認」のままの加算は、判定時にすべて「要確認」になります。管理者に確認のうえ入力してください。</p>
     <form id="office-form" class="form-grid">
-      <label>緊急時訪問看護（24時間対応）体制の届出 ${triSelect("urgent_visit_registered", o.urgent_visit_registered)}</label>
+      <label>緊急時訪問看護（24時間対応）体制の届出【介護】 ${triSelect("urgent_visit_registered", o.urgent_visit_registered)}</label>
+      <label>24時間対応体制加算の届出【医療】 ${triSelect("system_24h_registered", o.system_24h_registered)}</label>
+      <label>訪問看護医療DX情報活用加算の届出（オンライン請求・資格確認体制） ${triSelect("dx_info_registered", o.dx_info_registered)}</label>
+      <label>特別地域の指定に該当（特別地域訪問看護加算・遠隔死亡診断） ${triSelect("special_area", o.special_area)}</label>
       <label>理学療法士等の訪問割合（%・直近の実績）
         <input type="number" name="ptotst_ratio_pct" min="0" max="100" step="0.1"
           value="${o.ptotst_visit_ratio == null ? "" : o.ptotst_visit_ratio * 100}" placeholder="未入力=要確認">
@@ -1007,14 +1477,14 @@ function renderMaster() {
       <td>${esc(it.code)}</td>
       <td>${esc(it.name_ja)}</td>
       <td>${insuranceChip(it.insurance_type)}</td>
-      <td>${esc({ basic: "基本", addition: "加算", reduction: "減算" }[it.category] || it.category)}</td>
-      <td class="num">${it.amount != null ? esc(it.amount) + esc(it.unit || "") : '<span class="chip chip-confirm">未設定</span>'}</td>
+      <td>${esc({ basic: "基本", addition: "加算", reduction: "減算", ryoyohi: "療養費" }[it.category] || it.category)}</td>
+      <td class="num">${it.amount != null ? esc(it.amount) + esc(it.unit || "") : (it.amount_tiers ? '<span class="chip chip-confirm">区分別・未設定</span>' : '<span class="chip chip-confirm">未設定</span>')}</td>
       <td>${it.effective_from ? esc(it.effective_from) : '<span class="chip chip-confirm">未設定</span>'}</td>
-      <td>${it.verified ? '<span class="chip chip-ok">検証済</span>' : '<span class="chip chip-confirm">未検証</span>'}</td>
+      <td>${verChip(Engine.verState(it))}</td>
       <td>${it.source_reference ? esc(it.source_reference) : '<span class="muted">—</span>'}</td>
     </tr>`).join("");
 
-  const unverified = m.items.filter(i => !i.verified).length;
+  const unverified = m.items.filter(i => Engine.verState(i) !== "official_confirmed").length;
   return `
   <section class="panel">
     <div class="panel-head">
@@ -1222,13 +1692,25 @@ document.addEventListener("submit", (e) => {
       birth_date: d.birth_date || null,
       care_level: d.care_level || null,
       designated_disease_hyou7: triFromForm(d.designated_disease_hyou7),
+      hyou7_disease_written: d.hyou7_disease_written || "",
       designated_disease_16_of_40to64: triFromForm(d.designated_disease_16_of_40to64),
       psychiatric_non_dementia: triFromForm(d.psychiatric_non_dementia),
+      // 別表8：指示書の記載をそのまま入力（診断名からの自動判定はしない）
+      beppyou8_applicable: triFromForm(d.beppyou8_applicable),
+      beppyou8_severe: triFromForm(d.beppyou8_severe),
+      beppyou8_items: d.beppyou8_items || "",
       instruction_sheet: {
         issued_date: d.issued_date || null,
         valid_until: d.valid_until || null,
         special_instruction_period: (d.sp_start || d.sp_end) ? { start: d.sp_start || null, end: d.sp_end || null } : null
       },
+      // 医療加算用
+      consent_24h: triFromForm(d.consent_24h),
+      discharge_date: d.discharge_date || null,
+      discharge_joint_guidance: triFromForm(d.discharge_joint_guidance),
+      death_date: d.death_date || null,
+      terminal_consent: triFromForm(d.terminal_consent),
+      // 後方互換のため残置（未使用）
       special_management_conditions_hyou8: [],
       notes: d.notes || ""
     };
@@ -1240,6 +1722,8 @@ document.addEventListener("submit", (e) => {
   }
 
   if (f.id === "visit-form") {
+    // チェックされた「実施した記録」を配列に集約
+    const recorded = Object.keys(VISIT_ACTIVITIES).filter(k => d["act_" + k] === "on");
     state.visits.push({
       visit_id: nextVisitId(),
       patient_id: d.patient_id,
@@ -1249,6 +1733,12 @@ document.addEventListener("submit", (e) => {
       role: d.role,
       staff: [{ role: d.role }],
       same_building: triFromForm(d.same_building),
+      same_building_count: d.same_building_count ? Number(d.same_building_count) : null,
+      is_emergency: d.is_emergency === "true",
+      emergency_contact_time: d.emergency_contact_time || null,
+      accompanied: d.accompanied === "true",
+      partner_role: d.partner_role || null,
+      recorded_activities: recorded,
       purpose: d.purpose || ""
     });
     persist(); render();
@@ -1256,6 +1746,9 @@ document.addEventListener("submit", (e) => {
 
   if (f.id === "office-form") {
     state.office.urgent_visit_registered = triFromForm(d.urgent_visit_registered);
+    state.office.system_24h_registered = triFromForm(d.system_24h_registered);
+    state.office.dx_info_registered = triFromForm(d.dx_info_registered);
+    state.office.special_area = triFromForm(d.special_area);
     state.office.ptotst_visit_ratio = d.ptotst_ratio_pct === "" ? null : Number(d.ptotst_ratio_pct) / 100;
     state.office.notes = d.notes || "";
     persist(); render();

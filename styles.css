@@ -135,6 +135,29 @@ tr.visit-row.selected { background: var(--medical-bg); }
 .chip-confirm { background: var(--confirm-bg); color: var(--confirm); border: 1px solid #E8D6A8; }
 .chip-ok      { background: var(--ok-bg);      color: var(--ok);      border: 1px solid #B4DCC6; }
 .chip-fail    { background: var(--fail-bg);    color: var(--fail);    border: 1px solid #E5BCBC; }
+.chip-add     { background: var(--medical-bg); color: var(--medical); border: 1px solid #B9CCE8; }
+.chip-recheck { background: #FCEEE0; color: #9A4A17; border: 1px solid #E8C9AC; }
+
+/* 加算・月次加算のブロック */
+h4.add-head { color: var(--medical); border-top: 1px solid var(--line); padding-top: 12px; margin-top: 16px; }
+.month-add-block { margin: 10px 0 16px; }
+.month-add-block > h4 { margin: 10px 0 6px; font-size: 14px; color: var(--head); }
+
+/* フォームのセクション見出し・実施記録チェック群 */
+.form-grid .section-label {
+  font-size: 12px; font-weight: 700; color: var(--head);
+  border-top: 1px dashed var(--line); padding-top: 12px; margin-top: 4px;
+}
+fieldset.activity-set {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px 10px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 14px;
+}
+fieldset.activity-set legend { font-size: 12px; font-weight: 700; color: var(--ink-soft); padding: 0 4px; }
+fieldset.activity-set label.chk {
+  flex-direction: row; align-items: center; gap: 6px; font-weight: 500; color: var(--ink);
+}
+fieldset.activity-set label.chk input { width: auto; }
 
 /* ---------- 判定詳細（根拠トレース＝このツールの中核表示） ---------- */
 .detail {
